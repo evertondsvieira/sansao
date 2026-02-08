@@ -1,0 +1,30 @@
+{
+  "name": "create-sansao",
+  "version": "0.0.1",
+  "description": "Scaffold Sansao projects (coming soon).",
+  "type": "module",
+  "bin": {
+    "create-sansao": "index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "sansao",
+    "create",
+    "scaffold",
+    "initializer"
+  ],
+  "author": "Everton Da Silva Vieira",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/evertondsvieira/sansao.git"
+  },
+  "bugs": {
+    "url": "https://github.com/evertondsvieira/sansao/issues"
+  },
+  "homepage": "https://github.com/evertondsvieira/sansao"
+}
