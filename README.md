@@ -1,8 +1,7 @@
-# Sansao
+# 🦁📋 Sansao
 
-> Strong backend. Simple contracts.
+**Contract-first backend framework for predictable APIs.**
 
-Contract-first backend framework for predictable APIs.
 Built on Web Standards, designed to pair with modern frontend architectures.
 
 ## Install
