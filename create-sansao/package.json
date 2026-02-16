@@ -1,7 +1,7 @@
 {
   "name": "create-sansao",
-  "version": "0.0.1",
-  "description": "Scaffold Sansao projects (coming soon).",
+  "version": "0.1.0",
+  "description": "Scaffold Sansao projects with npm create.",
   "type": "module",
   "bin": {
     "create-sansao": "index.js"
@@ -9,7 +9,7 @@
   "files": [
     "index.js",
     "README.md",
-    "LICENSE"
+    "template"
   ],
   "keywords": [
     "sansao",
