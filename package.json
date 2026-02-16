@@ -1,21 +1,55 @@
 {
   "name": "sansao",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "0.1.0",
+  "description": "Backend-first, contract-driven framework for predictable APIs",
   "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/src/index.js",
+      "types": "./dist/src/index.d.ts"
+    },
+    "./node": {
+      "import": "./dist/src/adapters/node.js",
+      "types": "./dist/src/adapters/node.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc --watch",
+    "example": "node --experimental-strip-types examples/basic.ts",
+    "pretest": "npm run build",
+    "test": "node --experimental-strip-types --test tests/**/*.test.ts"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/evertondsvieira/sansao.git"
   },
-  "keywords": [],
+  "keywords": [
+    "backend",
+    "framework",
+    "contract-first",
+    "typescript",
+    "web-standards",
+    "rest",
+    "api"
+  ],
   "author": "Everton Da Silva Vieira",
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/evertondsvieira/sansao/issues"
   },
-  "homepage": "https://github.com/evertondsvieira/sansao/blob/main/README.md"
+  "homepage": "https://github.com/evertondsvieira/sansao/blob/main/README.md",
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.2",
+    "typescript": "^5.9.3"
+  }
 }
