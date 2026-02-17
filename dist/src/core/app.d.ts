@@ -5,6 +5,10 @@ import type { Handler } from "./handler.js";
  * Each middleware can short-circuit or call `next()` to continue the chain.
  */
 export type Middleware = (ctx: Context, next: () => Promise<Response>) => Promise<Response> | Response;
+export type ResponseValidationMode = "off" | "development" | "always";
+export type AppOptions = {
+    responseValidation?: ResponseValidationMode;
+};
 /**
  * Main Sansao runtime.
  *
@@ -18,6 +22,8 @@ export declare class App {
     private router;
     private handlers;
     private middlewares;
+    private options;
+    constructor(options?: AppOptions);
     register(handler: Handler): void;
     register(handlers: Handler[]): void;
     private registerSingle;
@@ -25,6 +31,16 @@ export declare class App {
     use(middleware: Middleware): void;
     /** Handles a Fetch API request end-to-end and returns a response. */
     fetch(request: Request): Promise<Response>;
+    private errorResponse;
+    private shouldValidateResponse;
+    private isDevelopmentRuntime;
+    private readDenoEnv;
+    private validateResponse;
+    private readResponseBody;
+    private shouldSkipResponseBodyValidation;
+    private isJsonContentType;
+    private readResponseText;
+    private readWithTimeout;
     private parseParams;
     /**
      * Parses querystring values and retries with basic scalar coercion on failing keys.
@@ -40,5 +56,5 @@ export declare class App {
     private parseBody;
 }
 /** Creates a new application instance. */
-export declare function createApp(): App;
+export declare function createApp(options?: AppOptions): App;
 //# sourceMappingURL=app.d.ts.map

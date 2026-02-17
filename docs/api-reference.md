@@ -53,7 +53,10 @@ defineHandler(myContract, async (ctx) => {
 ## `createApp`
 
 ```ts
-const app = createApp();
+const app = createApp({
+  // default: "development"
+  responseValidation: "development", // "off" | "development" | "always"
+});
 
 app.register(handler);
 app.register([handlerA, handlerB]);
@@ -102,6 +105,7 @@ ctx.deleteCookie(name, options?);
 - `DELETE` requests can include a validated body when defined in contract.
 - Empty JSON payload can validate as `undefined` if schema allows it.
 - Query parsing uses selective coercion fallback for typed schemas.
+- Response validation can run against `contract.response[status]` based on `createApp({ responseValidation })`.
 
 ## Node Adapter
 

@@ -13,6 +13,15 @@ export type Middleware = (
   next: () => Promise<Response>
 ) => Promise<Response> | Response;
 
+export type ResponseValidationMode = "off" | "development" | "always";
+
+export type AppOptions = {
+  responseValidation?: ResponseValidationMode;
+};
+
+const RESPONSE_VALIDATION_MAX_BODY_BYTES = 1024 * 1024;
+const RESPONSE_VALIDATION_READ_TIMEOUT_MS = 50;
+
 /**
  * Main Sansao runtime.
  *
@@ -26,6 +35,13 @@ export class App {
   private router = new Router();
   private handlers = new Map<ContractDefinition, HandlerFunction<any>>();
   private middlewares: Middleware[] = [];
+  private options: Required<AppOptions>;
+
+  constructor(options: AppOptions = {}) {
+    this.options = {
+      responseValidation: options.responseValidation ?? "development",
+    };
+  }
 
   register(handler: Handler): void;
   register(handlers: Handler[]): void;
@@ -55,20 +71,14 @@ export class App {
       const match = this.router.find(request.method, url.pathname);
 
       if (!match) {
-        return new Response(JSON.stringify({ error: "Not Found" }), {
-          status: 404,
-          headers: { "content-type": "application/json" },
-        });
+        return this.errorResponse(404, "Not Found");
       }
 
       const { contract, params } = match;
       const handler = this.handlers.get(contract);
 
       if (!handler) {
-        return new Response(JSON.stringify({ error: "Handler not found" }), {
-          status: 500,
-          headers: { "content-type": "application/json" },
-        });
+        return this.errorResponse(500, "Handler not found");
       }
 
       const ctx = new Context(request, contract);
@@ -79,10 +89,7 @@ export class App {
         if (paramsResult.success) {
           (ctx as any).params = paramsResult.data;
         } else {
-          return new Response(
-            JSON.stringify({ error: "Invalid params", details: paramsResult.error }),
-            { status: 400, headers: { "content-type": "application/json" } }
-          );
+          return this.errorResponse(400, "Invalid params", paramsResult.error);
         }
       } else {
         (ctx as any).params = params;
@@ -94,10 +101,7 @@ export class App {
         if (queryResult.success) {
           (ctx as any).query = queryResult.data;
         } else {
-          return new Response(
-            JSON.stringify({ error: "Invalid query", details: queryResult.error }),
-            { status: 400, headers: { "content-type": "application/json" } }
-          );
+          return this.errorResponse(400, "Invalid query", queryResult.error);
         }
       } else {
         (ctx as any).query = Object.fromEntries(url.searchParams);
@@ -109,10 +113,7 @@ export class App {
         if (headersResult.success) {
           (ctx as any).headers = headersResult.data;
         } else {
-          return new Response(
-            JSON.stringify({ error: "Invalid headers", details: headersResult.error }),
-            { status: 400, headers: { "content-type": "application/json" } }
-          );
+          return this.errorResponse(400, "Invalid headers", headersResult.error);
         }
       }
 
@@ -128,10 +129,7 @@ export class App {
         if (bodyResult.success) {
           (ctx as any).body = bodyResult.data;
         } else {
-          return new Response(
-            JSON.stringify({ error: "Invalid body", details: bodyResult.error }),
-            { status: 400, headers: { "content-type": "application/json" } }
-          );
+          return this.errorResponse(400, "Invalid body", bodyResult.error);
         }
       }
 
@@ -145,19 +143,262 @@ export class App {
       };
 
       const response = await executeMiddleware(0);
-
-      // Response schema validation could be added here for development mode.
+      const responseValidationResult = await this.validateResponse(contract, response);
+      if (!responseValidationResult.success) {
+        return this.errorResponse(500, "Invalid response", responseValidationResult.error);
+      }
 
       return response;
     } catch (error: any) {
       const status = error.status || 500;
       const message = error.message || "Internal Server Error";
-      
-      return new Response(JSON.stringify({ error: message }), {
-        status,
-        headers: { "content-type": "application/json" },
-      });
+
+      return this.errorResponse(status, message);
     }
+  }
+
+  private errorResponse(status: number, error: string, details?: unknown): Response {
+    const payload: { error: string; details?: unknown } = { error };
+    if (details !== undefined) {
+      payload.details = details;
+    }
+    return new Response(JSON.stringify(payload), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  private shouldValidateResponse(): boolean {
+    if (this.options.responseValidation === "always") {
+      return true;
+    }
+
+    if (this.options.responseValidation === "off") {
+      return false;
+    }
+
+    return this.isDevelopmentRuntime();
+  }
+
+  private isDevelopmentRuntime(): boolean {
+    const nodeEnv = globalThis.process?.env?.NODE_ENV;
+    if (typeof nodeEnv === "string") {
+      return nodeEnv !== "production";
+    }
+
+    const bunEnv = (globalThis as any).Bun?.env?.NODE_ENV;
+    if (typeof bunEnv === "string") {
+      return bunEnv !== "production";
+    }
+
+    const denoEnv = this.readDenoEnv();
+    if (typeof denoEnv === "string") {
+      return denoEnv !== "production";
+    }
+
+    // Default to development when NODE_ENV is unavailable so "development" mode
+    // remains active in local/test environments where env vars are unset.
+    return true;
+  }
+
+  private readDenoEnv(): string | undefined {
+    const deno = (globalThis as any).Deno;
+    if (!deno?.env?.get) {
+      return undefined;
+    }
+    try {
+      return deno.env.get("NODE_ENV");
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async validateResponse(
+    contract: ContractDefinition,
+    response: Response
+  ): Promise<{ success: true } | { success: false; error: unknown }> {
+    if (!this.shouldValidateResponse()) {
+      return { success: true };
+    }
+
+    if (!contract.response) {
+      return { success: true };
+    }
+
+    const schema = contract.response[response.status];
+    if (!schema) {
+      return { success: true };
+    }
+
+    const bodyResult = await this.readResponseBody(response);
+    if (!bodyResult.success) {
+      return { success: false, error: bodyResult.error };
+    }
+    if (!("data" in bodyResult)) {
+      return { success: true };
+    }
+
+    const parseResult = schema.safeParse(bodyResult.data);
+    return parseResult.success
+      ? { success: true }
+      : { success: false, error: parseResult.error };
+  }
+
+  private async readResponseBody(
+    response: Response
+  ): Promise<
+    | { success: true; data: unknown }
+    | { success: true; skipped: true }
+    | { success: false; error: string }
+  > {
+    if (response.status === 204 || response.status === 304) {
+      return { success: true, data: undefined };
+    }
+    if (!response.body) {
+      return { success: true, data: undefined };
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    const normalizedType = contentType.toLowerCase();
+    if (this.shouldSkipResponseBodyValidation(response, normalizedType)) {
+      return { success: true, skipped: true };
+    }
+    const cloned = response.clone();
+    const contentLength = response.headers.get("content-length");
+    const parsedLength =
+      contentLength === null || contentLength.trim() === ""
+        ? undefined
+        : Number(contentLength);
+    const hasValidContentLength =
+      typeof parsedLength === "number" &&
+      Number.isFinite(parsedLength) &&
+      parsedLength >= 0;
+    const textResult = await this.readResponseText(cloned, !hasValidContentLength);
+    if (!textResult.success) {
+      return textResult;
+    }
+    if (!("data" in textResult)) {
+      return textResult;
+    }
+
+    const text = textResult.data;
+    if (this.isJsonContentType(normalizedType)) {
+      if (text.trim() === "") {
+        return { success: true, data: undefined };
+      }
+      try {
+        return { success: true, data: JSON.parse(text) };
+      } catch {
+        return { success: false, error: "Response body is not valid JSON" };
+      }
+    }
+
+    return { success: true, data: text };
+  }
+
+  private shouldSkipResponseBodyValidation(response: Response, contentType: string): boolean {
+    if (!response.body) {
+      return false;
+    }
+
+    const normalizedType = contentType.toLowerCase();
+    if (
+      normalizedType.includes("text/event-stream") ||
+      normalizedType.includes("application/x-ndjson")
+    ) {
+      return true;
+    }
+
+    const contentLength = response.headers.get("content-length");
+    if (!contentLength) {
+      return false;
+    }
+
+    const parsedLength = Number(contentLength);
+    if (!Number.isFinite(parsedLength) || parsedLength < 0) {
+      return false;
+    }
+
+    return parsedLength > RESPONSE_VALIDATION_MAX_BODY_BYTES;
+  }
+
+  private isJsonContentType(contentType: string): boolean {
+    return (
+      contentType.includes("application/json") ||
+      contentType.includes("+json")
+    );
+  }
+
+  private async readResponseText(
+    response: Response,
+    useTimeout: boolean
+  ): Promise<
+    | { success: true; data: string }
+    | { success: true; skipped: true }
+    | { success: false; error: string }
+  > {
+    if (!response.body) {
+      return { success: true, data: "" };
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const chunks: string[] = [];
+    let totalBytes = 0;
+    const deadline = useTimeout ? Date.now() + RESPONSE_VALIDATION_READ_TIMEOUT_MS : Infinity;
+
+    try {
+      while (true) {
+        const remainingMs = deadline - Date.now();
+        const next = useTimeout
+          ? await this.readWithTimeout(reader, remainingMs)
+          : await reader.read();
+
+        if (next === "timeout") {
+          void reader.cancel().catch(() => undefined);
+          return { success: true, skipped: true };
+        }
+
+        if (next.done) {
+          chunks.push(decoder.decode());
+          return { success: true, data: chunks.join("") };
+        }
+
+        totalBytes += next.value.byteLength;
+        if (totalBytes > RESPONSE_VALIDATION_MAX_BODY_BYTES) {
+          void reader.cancel().catch(() => undefined);
+          return { success: true, skipped: true };
+        }
+
+        chunks.push(decoder.decode(next.value, { stream: true }));
+      }
+    } catch {
+      return { success: false, error: "Failed to read response body" };
+    }
+  }
+
+  private async readWithTimeout(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    remainingMs: number
+  ): Promise<ReadableStreamReadResult<Uint8Array> | "timeout"> {
+    if (remainingMs <= 0) {
+      return "timeout";
+    }
+
+    return new Promise<ReadableStreamReadResult<Uint8Array> | "timeout">((resolve, reject) => {
+      const timeoutId = setTimeout(() => resolve("timeout"), remainingMs);
+
+      reader.read().then(
+        (result) => {
+          clearTimeout(timeoutId);
+          resolve(result);
+        },
+        (error) => {
+          clearTimeout(timeoutId);
+          reject(error);
+        }
+      );
+    });
   }
 
   private parseParams(schema: z.ZodTypeAny, params: Record<string, string>): { success: true; data: any } | { success: false; error: any } {
@@ -292,6 +533,6 @@ export class App {
 }
 
 /** Creates a new application instance. */
-export function createApp(): App {
-  return new App();
+export function createApp(options?: AppOptions): App {
+  return new App(options);
 }

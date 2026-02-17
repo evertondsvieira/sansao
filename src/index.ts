@@ -14,7 +14,13 @@ export type {
 
 // Core
 export { contract } from "./core/contract.js";
-export { createApp, App, type Middleware } from "./core/app.js";
+export {
+  createApp,
+  App,
+  type Middleware,
+  type AppOptions,
+  type ResponseValidationMode,
+} from "./core/app.js";
 export { defineHandler, type Handler, type HandlerFunction } from "./core/handler.js";
 export { Context, type CookieOptions } from "./core/context.js";
 

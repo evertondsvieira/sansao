@@ -1,7 +1,7 @@
 import { createApp, defineHandler, contract, z } from "../src/index.ts";
 import { serve as nodeServe } from "../src/adapters/node.ts";
 
-// Definindo contratos
+// Defining contracts
 const getUser = contract.get("/users/:id", {
   params: z.object({ id: z.string() }),
   response: {
@@ -26,9 +26,9 @@ const login = contract.post("/login", {
   }),
 });
 
-// Criando handlers
+// Creating handlers
 const getUserHandler = defineHandler(getUser, async (ctx) => {
-  // Simulando busca no banco
+  // Simulating a database lookup
   const user = {
     id: ctx.params.id,
     name: "João Silva",
@@ -39,7 +39,7 @@ const getUserHandler = defineHandler(getUser, async (ctx) => {
 
 const createUserHandler = defineHandler(createUser, async (ctx) => {
   const body = ctx.body as { name: string; email: string };
-  // Simulando criação
+  // Simulating creation
   const user = {
     id: crypto.randomUUID(),
     name: body.name,
@@ -50,11 +50,11 @@ const createUserHandler = defineHandler(createUser, async (ctx) => {
 
 const loginHandler = defineHandler(login, async (ctx) => {
   const body = ctx.body as { email: string; password: string };
-  // Exemplo de HTML-first: aceita form submit OU JSON
+  // HTML-first example: accepts form submit OR JSON
   if (body.email === "test@test.com" && body.password === "123456") {
     ctx.setCookie("session", "abc123", { httpOnly: true });
     
-    // Verifica se é um form submit (Accept: text/html) ou API call
+    // Checks whether this is a form submit (Accept: text/html) or an API call
     const acceptHeader = ctx.request.headers.get("accept") || "";
     if (acceptHeader.includes("text/html")) {
       return ctx.redirect("/dashboard");
@@ -66,10 +66,10 @@ const loginHandler = defineHandler(login, async (ctx) => {
   return ctx.html(401, "<p>Credenciais inválidas</p>");
 });
 
-// Criando app
+// Creating app
 const app = createApp();
 
-// Registrando middleware de logging
+// Registering logging middleware
 app.use(async (ctx, next) => {
   const start = Date.now();
   const response = await next();
@@ -78,10 +78,10 @@ app.use(async (ctx, next) => {
   return response;
 });
 
-// Registrando handlers
+// Registering handlers
 app.register([getUserHandler, createUserHandler, loginHandler]);
 
-// Iniciando servidor
+// Starting server
 nodeServe(app, { port: 3000 });
 
 console.log("📚 Exemplos disponíveis:");
