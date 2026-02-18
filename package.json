@@ -13,6 +13,14 @@
     "./node": {
       "import": "./dist/src/adapters/node.js",
       "types": "./dist/src/adapters/node.d.ts"
+    },
+    "./bun": {
+      "import": "./dist/src/adapters/bun.js",
+      "types": "./dist/src/adapters/bun.d.ts"
+    },
+    "./deno": {
+      "import": "./dist/src/adapters/deno.js",
+      "types": "./dist/src/adapters/deno.d.ts"
     }
   },
   "files": [

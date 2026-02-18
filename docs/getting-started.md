@@ -47,7 +47,13 @@ const createUser = contract.post("/users", {
   },
 });
 
-const app = createApp();
+const app = createApp({
+  // Be explicit in app code:
+  // - development: validates responses
+  // - production: disables validation overhead
+  responseValidation:
+    process.env.NODE_ENV === "production" ? "off" : "development",
+});
 
 app.register(
   defineHandler(createUser, async (ctx) => {
@@ -63,6 +69,34 @@ app.register(
 );
 
 serve(app, { port: 3000 });
+```
+
+If you need strict contract enforcement in production too:
+
+```ts
+const app = createApp({
+  responseValidation: "always",
+});
+```
+
+### Run with Bun
+
+```ts
+import { serve } from "sansao/bun";
+```
+
+```bash
+bun src/index.ts
+```
+
+### Run with Deno
+
+```ts
+import { serve } from "sansao/deno";
+```
+
+```bash
+deno run --allow-net src/index.ts
 ```
 
 ## Try It

@@ -7,7 +7,10 @@ const health = contract.get("/health", {
   },
 });
 
-const app = createApp();
+const app = createApp({
+  responseValidation:
+    process.env.NODE_ENV === "production" ? "off" : "development",
+});
 
 app.register(
   defineHandler(health, async (ctx) => {

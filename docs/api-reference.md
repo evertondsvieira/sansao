@@ -65,6 +65,21 @@ app.use(middleware);
 const response = await app.fetch(request); // Promise<Response>
 ```
 
+### `responseValidation` modes
+
+- `"off"`: disables response validation.
+- `"development"` (default): validates in development-like environments, skips in production.
+- `"always"`: validates in every environment.
+
+Recommended explicit app config:
+
+```ts
+const app = createApp({
+  responseValidation:
+    process.env.NODE_ENV === "production" ? "off" : "development",
+});
+```
+
 ### Methods
 
 - `app.register(handler | handler[])`: registers one or many handlers.
@@ -111,6 +126,22 @@ ctx.deleteCookie(name, options?);
 
 ```ts
 import { serve } from "sansao/node";
+
+serve(app, { port: 3000 });
+```
+
+## Bun Adapter
+
+```ts
+import { serve } from "sansao/bun";
+
+serve(app, { port: 3000 });
+```
+
+## Deno Adapter
+
+```ts
+import { serve } from "sansao/deno";
 
 serve(app, { port: 3000 });
 ```

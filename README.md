@@ -30,6 +30,8 @@ app.register(
 serve(app, { port: 3000 });
 ```
 
+Runtime adapters available: `sansao/node`, `sansao/bun`, `sansao/deno`.
+
 ## Documentation
 
 - Getting Started: [`docs/getting-started.md`](docs/getting-started.md)

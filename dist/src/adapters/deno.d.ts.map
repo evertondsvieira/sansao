@@ -1,0 +1,1 @@
+{"version":3,"file":"deno.d.ts","sourceRoot":"","sources":["../../../src/adapters/deno.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,GAAG,EAAE,MAAM,gBAAgB,CAAC;AAe1C,MAAM,MAAM,gBAAgB,GAAG;IAC7B,IAAI,CAAC,EAAE,MAAM,CAAC;IACd,QAAQ,CAAC,EAAE,MAAM,CAAC;CACnB,CAAC;AAEF,wBAAgB,KAAK,CAAC,GAAG,EAAE,GAAG,EAAE,OAAO,GAAE,gBAAqB,GAAG,OAAO,CA4BvE"}
