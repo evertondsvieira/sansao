@@ -1,4 +1,16 @@
 import { z } from "zod";
+export class HttpError extends Error {
+    status;
+    code;
+    details;
+    constructor(status, message, options = {}) {
+        super(message);
+        this.name = "HttpError";
+        this.status = status;
+        this.code = options.code;
+        this.details = options.details;
+    }
+}
 /**
  * Request/response context passed to route handlers.
  *
@@ -82,14 +94,123 @@ export class Context {
         return new Response(null, { status, headers });
     }
     /** Creates an Error object carrying an HTTP status for upstream catch handling. */
-    error(status, message) {
-        const error = new Error(message);
-        error.status = status;
-        return error;
+    error(status, message, options) {
+        return new HttpError(status, message, options);
+    }
+    /** Throws an HttpError for concise early exits from handlers/middlewares. */
+    fail(status, message, options) {
+        throw this.error(status, message, options);
     }
     /** Sets/overwrites a header to be included in helper-generated responses. */
     setHeader(name, value) {
         this.responseHeaders.set(name, value);
+    }
+    /** Builds a generic streaming response preserving custom headers/cookies. */
+    stream(status, body, options = {}) {
+        const headers = this.composeResponseHeaders(options.headers);
+        return new Response(body, { status, headers });
+    }
+    /**
+     * Builds an SSE response preserving custom headers/cookies.
+     * Accepts a ReadableStream or an AsyncIterable of string/Uint8Array chunks.
+     */
+    sse(status, source, options = {}) {
+        const headers = this.composeResponseHeaders(options.headers);
+        headers.set("content-type", "text/event-stream; charset=utf-8");
+        headers.set("cache-control", "no-cache, no-transform");
+        headers.set("connection", "keep-alive");
+        const body = this.toSseBody(source, options.retry);
+        return new Response(body, { status, headers });
+    }
+    composeResponseHeaders(extraHeaders) {
+        const headers = new Headers(this.responseHeaders);
+        if (extraHeaders) {
+            this.applyHeaders(headers, extraHeaders);
+        }
+        this.addCookiesToHeaders(headers);
+        return headers;
+    }
+    applyHeaders(target, extraHeaders) {
+        if (extraHeaders instanceof Headers) {
+            extraHeaders.forEach((value, key) => target.set(key, value));
+            return;
+        }
+        if (Array.isArray(extraHeaders)) {
+            for (const [key, value] of extraHeaders) {
+                target.set(key, value);
+            }
+            return;
+        }
+        for (const [key, value] of Object.entries(extraHeaders)) {
+            if (value !== undefined) {
+                target.set(key, String(value));
+            }
+        }
+    }
+    toSseBody(source, retry) {
+        const retryChunk = typeof retry === "number" && Number.isFinite(retry)
+            ? new TextEncoder().encode(`retry: ${Math.max(0, Math.floor(retry))}\n\n`)
+            : undefined;
+        if (source instanceof ReadableStream) {
+            if (!retryChunk) {
+                return source;
+            }
+            const reader = source.getReader();
+            return new ReadableStream({
+                start(controller) {
+                    controller.enqueue(retryChunk);
+                },
+                async pull(controller) {
+                    try {
+                        const next = await reader.read();
+                        if (next.done) {
+                            controller.close();
+                            reader.releaseLock();
+                            return;
+                        }
+                        controller.enqueue(next.value);
+                    }
+                    catch (error) {
+                        controller.error(error);
+                    }
+                },
+                cancel() {
+                    return reader.cancel();
+                },
+            });
+        }
+        return this.createSseStreamFromIterable(source, retryChunk);
+    }
+    createSseStreamFromIterable(source, retryChunk) {
+        const encoder = new TextEncoder();
+        return new ReadableStream({
+            async start(controller) {
+                if (retryChunk) {
+                    controller.enqueue(retryChunk);
+                }
+                try {
+                    for await (const chunk of source) {
+                        if (typeof chunk === "string") {
+                            controller.enqueue(encoder.encode(Context.toSseDataFrame(chunk)));
+                        }
+                        else {
+                            controller.enqueue(chunk);
+                        }
+                    }
+                    controller.close();
+                }
+                catch (error) {
+                    controller.error(error);
+                }
+            },
+        });
+    }
+    static toSseDataFrame(data) {
+        return data
+            .split(/\r?\n/)
+            .map((line) => `data: ${line}`)
+            .join("\n")
+            .concat("\n\n");
     }
     /** Serializes queued response cookies into Set-Cookie headers. */
     addCookiesToHeaders(headers) {

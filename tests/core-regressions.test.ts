@@ -562,3 +562,196 @@ test("response validation preserves empty non-JSON payload as empty string", asy
   const response = await app.fetch(new Request("http://localhost/empty-text"));
   assert.equal(response.status, 200);
 });
+
+test("multipart/form-data body is parsed with support for repeated fields", async () => {
+  const app = createApp();
+
+  const uploadRoute = contract.post("/upload", {
+    body: z.object({
+      name: z.string(),
+      tags: z.array(z.string()),
+    }),
+  });
+
+  app.register(
+    defineHandler(uploadRoute, (ctx) =>
+      ctx.json(200, {
+        name: ctx.body.name,
+        tags: ctx.body.tags,
+      })
+    )
+  );
+
+  const form = new FormData();
+  form.append("name", "contract-file");
+  form.append("tags", "backend");
+  form.append("tags", "zod");
+
+  const response = await app.fetch(
+    new Request("http://localhost/upload", {
+      method: "POST",
+      body: form,
+    })
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.name, "contract-file");
+  assert.deepEqual(body.tags, ["backend", "zod"]);
+});
+
+test("multipart/form-data invalid payload returns structured invalid body error", async () => {
+  const app = createApp();
+
+  const uploadRoute = contract.post("/upload-invalid", {
+    body: z.object({
+      name: z.string(),
+      tags: z.array(z.string()),
+    }),
+  });
+
+  app.register(defineHandler(uploadRoute, (ctx) => ctx.json(200, ctx.body)));
+
+  const form = new FormData();
+  form.append("tags", "single-tag");
+
+  const response = await app.fetch(
+    new Request("http://localhost/upload-invalid", {
+      method: "POST",
+      body: form,
+    })
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(body.error, "Invalid body");
+  assert.equal(body.code, "INVALID_BODY");
+});
+
+test("multipart/form-data malformed payload returns invalid body instead of 500", async () => {
+  const app = createApp();
+
+  const uploadRoute = contract.post("/upload-malformed", {
+    body: z.object({
+      name: z.string(),
+    }),
+  });
+
+  app.register(defineHandler(uploadRoute, (ctx) => ctx.json(200, ctx.body)));
+
+  const response = await app.fetch(
+    new Request("http://localhost/upload-malformed", {
+      method: "POST",
+      headers: {
+        "content-type": "multipart/form-data; boundary=----broken-boundary",
+      },
+      body: "this is not a valid multipart payload",
+    })
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(body.error, "Invalid body");
+  assert.equal(body.code, "INVALID_BODY");
+  assert.equal(body.details, "Invalid multipart form data");
+});
+
+test("context stream helper preserves custom headers and cookies", async () => {
+  const app = createApp();
+  const route = contract.get("/stream-helper");
+
+  app.register(
+    defineHandler(route, (ctx) => {
+      ctx.setCookie("session", "abc123", { path: "/", httpOnly: true });
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode("chunk"));
+          controller.close();
+        },
+      });
+      return ctx.stream(200, stream, {
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
+    })
+  );
+
+  const response = await app.fetch(new Request("http://localhost/stream-helper"));
+  const body = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.equal(body, "chunk");
+  assert.equal(response.headers.get("content-type"), "text/plain; charset=utf-8");
+  assert.match(response.headers.get("set-cookie") || "", /session=abc123/);
+});
+
+test("context sse helper formats string chunks and emits retry header", async () => {
+  const app = createApp();
+  const route = contract.get("/sse-helper");
+
+  app.register(
+    defineHandler(route, (ctx) =>
+      ctx.sse(
+        200,
+        (async function* (): AsyncIterable<string> {
+          yield "ping";
+          yield "pong";
+        })(),
+        { retry: 1500 }
+      )
+    )
+  );
+
+  const response = await app.fetch(new Request("http://localhost/sse-helper"));
+  const body = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type") || "", /text\/event-stream/);
+  assert.match(body, /retry: 1500/);
+  assert.match(body, /data: ping/);
+  assert.match(body, /data: pong/);
+});
+
+test("http errors include status, code and details in payload", async () => {
+  const app = createApp();
+  const route = contract.get("/typed-error");
+
+  app.register(
+    defineHandler(route, (ctx) =>
+      ctx.fail(422, "Validation failed", {
+        code: "VALIDATION_FAILED",
+        details: { field: "email" },
+      })
+    )
+  );
+
+  const response = await app.fetch(new Request("http://localhost/typed-error"));
+  const body = await response.json();
+
+  assert.equal(response.status, 422);
+  assert.equal(body.error, "Validation failed");
+  assert.equal(body.code, "VALIDATION_FAILED");
+  assert.deepEqual(body.details, { field: "email" });
+});
+
+test("invalid thrown status is normalized to 500 response", async () => {
+  const app = createApp();
+  const route = contract.get("/invalid-error-status");
+
+  app.register(
+    defineHandler(route, () => {
+      throw {
+        status: 700,
+        message: "Broken status from user-land",
+        code: "BROKEN_STATUS",
+      };
+    })
+  );
+
+  const response = await app.fetch(new Request("http://localhost/invalid-error-status"));
+  const body = await response.json();
+
+  assert.equal(response.status, 500);
+  assert.equal(body.error, "Broken status from user-land");
+  assert.equal(body.code, "BROKEN_STATUS");
+});

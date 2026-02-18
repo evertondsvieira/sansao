@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Router } from "./router.js";
-import { Context } from "./context.js";
+import { Context, HttpError } from "./context.js";
 const RESPONSE_VALIDATION_MAX_BODY_BYTES = 1024 * 1024;
 const RESPONSE_VALIDATION_READ_TIMEOUT_MS = 50;
 /**
@@ -45,12 +45,16 @@ export class App {
             const url = new URL(request.url);
             const match = this.router.find(request.method, url.pathname);
             if (!match) {
-                return this.errorResponse(404, "Not Found");
+                return this.errorResponse(404, "Not Found", {
+                    code: "ROUTE_NOT_FOUND",
+                });
             }
             const { contract, params } = match;
             const handler = this.handlers.get(contract);
             if (!handler) {
-                return this.errorResponse(500, "Handler not found");
+                return this.errorResponse(500, "Handler not found", {
+                    code: "HANDLER_NOT_FOUND",
+                });
             }
             const ctx = new Context(request, contract);
             // Parse and validate route params before handler execution.
@@ -60,7 +64,10 @@ export class App {
                     ctx.params = paramsResult.data;
                 }
                 else {
-                    return this.errorResponse(400, "Invalid params", paramsResult.error);
+                    return this.errorResponse(400, "Invalid params", {
+                        code: "INVALID_PARAMS",
+                        details: paramsResult.error,
+                    });
                 }
             }
             else {
@@ -73,7 +80,10 @@ export class App {
                     ctx.query = queryResult.data;
                 }
                 else {
-                    return this.errorResponse(400, "Invalid query", queryResult.error);
+                    return this.errorResponse(400, "Invalid query", {
+                        code: "INVALID_QUERY",
+                        details: queryResult.error,
+                    });
                 }
             }
             else {
@@ -86,7 +96,10 @@ export class App {
                     ctx.headers = headersResult.data;
                 }
                 else {
-                    return this.errorResponse(400, "Invalid headers", headersResult.error);
+                    return this.errorResponse(400, "Invalid headers", {
+                        code: "INVALID_HEADERS",
+                        details: headersResult.error,
+                    });
                 }
             }
             // Parse and validate request body for methods that can carry payloads.
@@ -100,7 +113,10 @@ export class App {
                     ctx.body = bodyResult.data;
                 }
                 else {
-                    return this.errorResponse(400, "Invalid body", bodyResult.error);
+                    return this.errorResponse(400, "Invalid body", {
+                        code: "INVALID_BODY",
+                        details: bodyResult.error,
+                    });
                 }
             }
             // Execute middleware stack in registration order.
@@ -114,25 +130,90 @@ export class App {
             const response = await executeMiddleware(0);
             const responseValidationResult = await this.validateResponse(contract, response);
             if (!responseValidationResult.success) {
-                return this.errorResponse(500, "Invalid response", responseValidationResult.error);
+                return this.errorResponse(500, "Invalid response", {
+                    code: "INVALID_RESPONSE",
+                    details: responseValidationResult.error,
+                });
             }
             return response;
         }
         catch (error) {
-            const status = error.status || 500;
-            const message = error.message || "Internal Server Error";
-            return this.errorResponse(status, message);
+            const normalizedError = this.normalizeError(error);
+            const errorOptions = {};
+            if (normalizedError.code !== undefined) {
+                errorOptions.code = normalizedError.code;
+            }
+            if (normalizedError.details !== undefined) {
+                errorOptions.details = normalizedError.details;
+            }
+            return this.errorResponse(normalizedError.status, normalizedError.message, errorOptions);
         }
     }
-    errorResponse(status, error, details) {
+    errorResponse(status, error, options = {}) {
         const payload = { error };
-        if (details !== undefined) {
-            payload.details = details;
+        if (options.code !== undefined) {
+            payload.code = options.code;
         }
+        if (options.details !== undefined) {
+            payload.details = options.details;
+        }
+        const safeStatus = this.normalizeStatusCode(status);
         return new Response(JSON.stringify(payload), {
-            status,
+            status: safeStatus,
             headers: { "content-type": "application/json" },
         });
+    }
+    normalizeError(error) {
+        if (error instanceof HttpError) {
+            const normalized = {
+                status: this.normalizeStatusCode(error.status),
+                message: error.message || "Internal Server Error",
+            };
+            if (error.code !== undefined) {
+                normalized.code = error.code;
+            }
+            if (error.details !== undefined) {
+                normalized.details = error.details;
+            }
+            return normalized;
+        }
+        if (typeof error === "object" && error !== null) {
+            const maybeError = error;
+            if (typeof maybeError.status === "number") {
+                const normalized = {
+                    status: this.normalizeStatusCode(maybeError.status),
+                    message: typeof maybeError.message === "string" && maybeError.message.length > 0
+                        ? maybeError.message
+                        : "Internal Server Error",
+                };
+                if (typeof maybeError.code === "string") {
+                    normalized.code = maybeError.code;
+                }
+                if (maybeError.details !== undefined) {
+                    normalized.details = maybeError.details;
+                }
+                return normalized;
+            }
+        }
+        if (error instanceof Error) {
+            return {
+                status: 500,
+                message: error.message || "Internal Server Error",
+            };
+        }
+        return {
+            status: 500,
+            message: "Internal Server Error",
+        };
+    }
+    normalizeStatusCode(status) {
+        if (typeof status === "number" &&
+            Number.isInteger(status) &&
+            status >= 100 &&
+            status <= 599) {
+            return status;
+        }
+        return 500;
     }
     shouldValidateResponse() {
         if (this.options.responseValidation === "always") {
@@ -410,6 +491,15 @@ export class App {
             const formData = await request.text();
             data = Object.fromEntries(new URLSearchParams(formData));
         }
+        else if (contentType.includes("multipart/form-data")) {
+            try {
+                const multipartData = await request.formData();
+                data = this.formDataToObject(multipartData);
+            }
+            catch {
+                return { success: false, error: "Invalid multipart form data" };
+            }
+        }
         else {
             // Fall back to JSON parsing first, then plain text.
             try {
@@ -423,6 +513,22 @@ export class App {
         return result.success
             ? { success: true, data: result.data }
             : { success: false, error: result.error };
+    }
+    formDataToObject(formData) {
+        const data = {};
+        formData.forEach((value, key) => {
+            const current = data[key];
+            if (current === undefined) {
+                data[key] = value;
+                return;
+            }
+            if (Array.isArray(current)) {
+                current.push(value);
+                return;
+            }
+            data[key] = [current, value];
+        });
+        return data;
     }
 }
 /** Creates a new application instance. */

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ContractDefinition } from "../types/index.js";
 import { Router } from "./router.js";
-import { Context } from "./context.js";
+import { Context, HttpError, type ErrorResponse } from "./context.js";
 import type { Handler, HandlerFunction } from "./handler.js";
 
 /**
@@ -71,14 +71,18 @@ export class App {
       const match = this.router.find(request.method, url.pathname);
 
       if (!match) {
-        return this.errorResponse(404, "Not Found");
+        return this.errorResponse(404, "Not Found", {
+          code: "ROUTE_NOT_FOUND",
+        });
       }
 
       const { contract, params } = match;
       const handler = this.handlers.get(contract);
 
       if (!handler) {
-        return this.errorResponse(500, "Handler not found");
+        return this.errorResponse(500, "Handler not found", {
+          code: "HANDLER_NOT_FOUND",
+        });
       }
 
       const ctx = new Context(request, contract);
@@ -89,7 +93,10 @@ export class App {
         if (paramsResult.success) {
           (ctx as any).params = paramsResult.data;
         } else {
-          return this.errorResponse(400, "Invalid params", paramsResult.error);
+          return this.errorResponse(400, "Invalid params", {
+            code: "INVALID_PARAMS",
+            details: paramsResult.error,
+          });
         }
       } else {
         (ctx as any).params = params;
@@ -101,7 +108,10 @@ export class App {
         if (queryResult.success) {
           (ctx as any).query = queryResult.data;
         } else {
-          return this.errorResponse(400, "Invalid query", queryResult.error);
+          return this.errorResponse(400, "Invalid query", {
+            code: "INVALID_QUERY",
+            details: queryResult.error,
+          });
         }
       } else {
         (ctx as any).query = Object.fromEntries(url.searchParams);
@@ -113,7 +123,10 @@ export class App {
         if (headersResult.success) {
           (ctx as any).headers = headersResult.data;
         } else {
-          return this.errorResponse(400, "Invalid headers", headersResult.error);
+          return this.errorResponse(400, "Invalid headers", {
+            code: "INVALID_HEADERS",
+            details: headersResult.error,
+          });
         }
       }
 
@@ -129,7 +142,10 @@ export class App {
         if (bodyResult.success) {
           (ctx as any).body = bodyResult.data;
         } else {
-          return this.errorResponse(400, "Invalid body", bodyResult.error);
+          return this.errorResponse(400, "Invalid body", {
+            code: "INVALID_BODY",
+            details: bodyResult.error,
+          });
         }
       }
 
@@ -145,27 +161,121 @@ export class App {
       const response = await executeMiddleware(0);
       const responseValidationResult = await this.validateResponse(contract, response);
       if (!responseValidationResult.success) {
-        return this.errorResponse(500, "Invalid response", responseValidationResult.error);
+        return this.errorResponse(500, "Invalid response", {
+          code: "INVALID_RESPONSE",
+          details: responseValidationResult.error,
+        });
       }
 
       return response;
-    } catch (error: any) {
-      const status = error.status || 500;
-      const message = error.message || "Internal Server Error";
-
-      return this.errorResponse(status, message);
+    } catch (error: unknown) {
+      const normalizedError = this.normalizeError(error);
+      const errorOptions: { code?: string; details?: unknown } = {};
+      if (normalizedError.code !== undefined) {
+        errorOptions.code = normalizedError.code;
+      }
+      if (normalizedError.details !== undefined) {
+        errorOptions.details = normalizedError.details;
+      }
+      return this.errorResponse(normalizedError.status, normalizedError.message, errorOptions);
     }
   }
 
-  private errorResponse(status: number, error: string, details?: unknown): Response {
-    const payload: { error: string; details?: unknown } = { error };
-    if (details !== undefined) {
-      payload.details = details;
+  private errorResponse(status: number, error: string, options: { code?: string; details?: unknown } = {}): Response {
+    const payload: ErrorResponse = { error };
+    if (options.code !== undefined) {
+      payload.code = options.code;
     }
+    if (options.details !== undefined) {
+      payload.details = options.details;
+    }
+    const safeStatus = this.normalizeStatusCode(status);
     return new Response(JSON.stringify(payload), {
-      status,
+      status: safeStatus,
       headers: { "content-type": "application/json" },
     });
+  }
+
+  private normalizeError(error: unknown): {
+    status: number;
+    message: string;
+    code?: string;
+    details?: unknown;
+  } {
+    if (error instanceof HttpError) {
+      const normalized: {
+        status: number;
+        message: string;
+        code?: string;
+        details?: unknown;
+      } = {
+        status: this.normalizeStatusCode(error.status),
+        message: error.message || "Internal Server Error",
+      };
+      if (error.code !== undefined) {
+        normalized.code = error.code;
+      }
+      if (error.details !== undefined) {
+        normalized.details = error.details;
+      }
+      return normalized;
+    }
+
+    if (typeof error === "object" && error !== null) {
+      const maybeError = error as {
+        status?: unknown;
+        message?: unknown;
+        code?: unknown;
+        details?: unknown;
+      };
+
+      if (typeof maybeError.status === "number") {
+        const normalized: {
+          status: number;
+          message: string;
+          code?: string;
+          details?: unknown;
+        } = {
+          status: this.normalizeStatusCode(maybeError.status),
+          message:
+            typeof maybeError.message === "string" && maybeError.message.length > 0
+              ? maybeError.message
+              : "Internal Server Error",
+        };
+        if (typeof maybeError.code === "string") {
+          normalized.code = maybeError.code;
+        }
+        if (maybeError.details !== undefined) {
+          normalized.details = maybeError.details;
+        }
+        return normalized;
+      }
+    }
+
+    if (error instanceof Error) {
+      return {
+        status: 500,
+        message: error.message || "Internal Server Error",
+      };
+    }
+
+    return {
+      status: 500,
+      message: "Internal Server Error",
+    };
+  }
+
+  private normalizeStatusCode(status: unknown): number {
+    if (
+      typeof status === "number" &&
+      Number.isInteger(status) &&
+      status >= 100 &&
+      status <= 599
+    ) {
+      return status;
+    }
+
+    return 500;
   }
 
   private shouldValidateResponse(): boolean {
@@ -516,6 +626,13 @@ export class App {
     } else if (contentType.includes("application/x-www-form-urlencoded")) {
       const formData = await request.text();
       data = Object.fromEntries(new URLSearchParams(formData));
+    } else if (contentType.includes("multipart/form-data")) {
+      try {
+        const multipartData = await request.formData();
+        data = this.formDataToObject(multipartData);
+      } catch {
+        return { success: false, error: "Invalid multipart form data" };
+      }
     } else {
       // Fall back to JSON parsing first, then plain text.
       try {
@@ -529,6 +646,27 @@ export class App {
     return result.success 
       ? { success: true, data: result.data }
       : { success: false, error: result.error };
+  }
+
+  private formDataToObject(formData: FormData): Record<string, FormDataEntryValue | FormDataEntryValue[]> {
+    const data: Record<string, FormDataEntryValue | FormDataEntryValue[]> = {};
+
+    formData.forEach((value, key) => {
+      const current = data[key];
+      if (current === undefined) {
+        data[key] = value;
+        return;
+      }
+
+      if (Array.isArray(current)) {
+        current.push(value);
+        return;
+      }
+
+      data[key] = [current, value];
+    });
+
+    return data;
   }
 }
 

@@ -14,6 +14,31 @@ export type CookieOptions = {
   sameSite?: "strict" | "lax" | "none";
 };
 
+export type ErrorResponse<TDetails = unknown> = {
+  error: string;
+  code?: string;
+  details?: TDetails;
+};
+
+export type HttpErrorOptions<TDetails = unknown> = {
+  code?: string;
+  details?: TDetails;
+};
+
+export class HttpError<TDetails = unknown> extends Error {
+  public readonly status: number;
+  public readonly code: string | undefined;
+  public readonly details: TDetails | undefined;
+
+  constructor(status: number, message: string, options: HttpErrorOptions<TDetails> = {}) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+    this.code = options.code;
+    this.details = options.details;
+  }
+}
+
 /**
  * Request/response context passed to route handlers.
  *
@@ -109,15 +134,159 @@ export class Context<TContract extends ContractDefinition = ContractDefinition> 
   }
 
   /** Creates an Error object carrying an HTTP status for upstream catch handling. */
-  error(status: number, message: string): Error {
-    const error = new Error(message);
-    (error as any).status = status;
-    return error;
+  error<TDetails = unknown>(
+    status: number,
+    message: string,
+    options?: HttpErrorOptions<TDetails>
+  ): HttpError<TDetails> {
+    return new HttpError(status, message, options);
+  }
+
+  /** Throws an HttpError for concise early exits from handlers/middlewares. */
+  fail<TDetails = unknown>(
+    status: number,
+    message: string,
+    options?: HttpErrorOptions<TDetails>
+  ): never {
+    throw this.error(status, message, options);
   }
 
   /** Sets/overwrites a header to be included in helper-generated responses. */
   setHeader(name: string, value: string): void {
     this.responseHeaders.set(name, value);
+  }
+
+  /** Builds a generic streaming response preserving custom headers/cookies. */
+  stream(
+    status: number,
+    body: BodyInit | null,
+    options: { headers?: HeadersInit } = {}
+  ): Response {
+    const headers = this.composeResponseHeaders(options.headers);
+    return new Response(body, { status, headers });
+  }
+
+  /**
+   * Builds an SSE response preserving custom headers/cookies.
+   * Accepts a ReadableStream or an AsyncIterable of string/Uint8Array chunks.
+   */
+  sse(
+    status: number,
+    source: ReadableStream<Uint8Array> | AsyncIterable<string | Uint8Array>,
+    options: { headers?: HeadersInit; retry?: number } = {}
+  ): Response {
+    const headers = this.composeResponseHeaders(options.headers);
+    headers.set("content-type", "text/event-stream; charset=utf-8");
+    headers.set("cache-control", "no-cache, no-transform");
+    headers.set("connection", "keep-alive");
+
+    const body = this.toSseBody(source, options.retry);
+    return new Response(body, { status, headers });
+  }
+
+  private composeResponseHeaders(extraHeaders?: HeadersInit): Headers {
+    const headers = new Headers(this.responseHeaders);
+    if (extraHeaders) {
+      this.applyHeaders(headers, extraHeaders);
+    }
+    this.addCookiesToHeaders(headers);
+    return headers;
+  }
+
+  private applyHeaders(target: Headers, extraHeaders: HeadersInit): void {
+    if (extraHeaders instanceof Headers) {
+      extraHeaders.forEach((value, key) => target.set(key, value));
+      return;
+    }
+
+    if (Array.isArray(extraHeaders)) {
+      for (const [key, value] of extraHeaders) {
+        target.set(key, value);
+      }
+      return;
+    }
+
+    for (const [key, value] of Object.entries(extraHeaders)) {
+      if (value !== undefined) {
+        target.set(key, String(value));
+      }
+    }
+  }
+
+  private toSseBody(
+    source: ReadableStream<Uint8Array> | AsyncIterable<string | Uint8Array>,
+    retry?: number
+  ): ReadableStream<Uint8Array> {
+    const retryChunk =
+      typeof retry === "number" && Number.isFinite(retry)
+        ? new TextEncoder().encode(`retry: ${Math.max(0, Math.floor(retry))}\n\n`)
+        : undefined;
+
+    if (source instanceof ReadableStream) {
+      if (!retryChunk) {
+        return source;
+      }
+      const reader = source.getReader();
+      return new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(retryChunk);
+        },
+        async pull(controller) {
+          try {
+            const next = await reader.read();
+            if (next.done) {
+              controller.close();
+              reader.releaseLock();
+              return;
+            }
+            controller.enqueue(next.value);
+          } catch (error) {
+            controller.error(error);
+          }
+        },
+        cancel() {
+          return reader.cancel();
+        },
+      });
+    }
+
+    return this.createSseStreamFromIterable(source, retryChunk);
+  }
+
+  private createSseStreamFromIterable(
+    source: AsyncIterable<string | Uint8Array>,
+    retryChunk?: Uint8Array
+  ): ReadableStream<Uint8Array> {
+    const encoder = new TextEncoder();
+
+    return new ReadableStream<Uint8Array>({
+      async start(controller) {
+        if (retryChunk) {
+          controller.enqueue(retryChunk);
+        }
+
+        try {
+          for await (const chunk of source) {
+            if (typeof chunk === "string") {
+              controller.enqueue(encoder.encode(Context.toSseDataFrame(chunk)));
+            } else {
+              controller.enqueue(chunk);
+            }
+          }
+          controller.close();
+        } catch (error) {
+          controller.error(error);
+        }
+      },
+    });
+  }
+
+  private static toSseDataFrame(data: string): string {
+    return data
+      .split(/\r?\n/)
+      .map((line) => `data: ${line}`)
+      .join("\n")
+      .concat("\n\n");
   }
 
   /** Serializes queued response cookies into Set-Cookie headers. */

@@ -32,6 +32,8 @@ export declare class App {
     /** Handles a Fetch API request end-to-end and returns a response. */
     fetch(request: Request): Promise<Response>;
     private errorResponse;
+    private normalizeError;
+    private normalizeStatusCode;
     private shouldValidateResponse;
     private isDevelopmentRuntime;
     private readDenoEnv;
@@ -54,6 +56,7 @@ export declare class App {
     private parseHeaders;
     /** Parses body by content-type and validates with zod. */
     private parseBody;
+    private formDataToObject;
 }
 /** Creates a new application instance. */
 export declare function createApp(options?: AppOptions): App;
