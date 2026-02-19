@@ -26,6 +26,9 @@ const login = contract.post("/login", {
   }),
 });
 
+const streamChunks = contract.get("/stream-chunks");
+const events = contract.get("/events");
+
 // Creating handlers
 const getUserHandler = defineHandler(getUser, async (ctx) => {
   // Simulating a database lookup
@@ -66,6 +69,30 @@ const loginHandler = defineHandler(login, async (ctx) => {
   return ctx.html(401, "<p>Credenciais inválidas</p>");
 });
 
+const streamChunksHandler = defineHandler(streamChunks, async (ctx) => {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode("chunk-1\n"));
+      controller.enqueue(encoder.encode("chunk-2\n"));
+      controller.close();
+    },
+  });
+
+  return ctx.stream(200, stream, {
+    headers: { "content-type": "text/plain; charset=utf-8" },
+  });
+});
+
+const eventsHandler = defineHandler(events, async (ctx) => {
+  async function* eventSource(): AsyncIterable<string> {
+    yield "first";
+    yield "second";
+  }
+
+  return ctx.sse(200, eventSource(), { retry: 1500 });
+});
+
 // Creating app
 const app = createApp();
 
@@ -79,7 +106,7 @@ app.use(async (ctx, next) => {
 });
 
 // Registering handlers
-app.register([getUserHandler, createUserHandler, loginHandler]);
+app.register([getUserHandler, createUserHandler, loginHandler, streamChunksHandler, eventsHandler]);
 
 // Starting server
 nodeServe(app, { port: 3000 });
@@ -88,3 +115,5 @@ console.log("📚 Exemplos disponíveis:");
 console.log("  GET  http://localhost:3000/users/123");
 console.log("  POST http://localhost:3000/users (JSON)");
 console.log("  POST http://localhost:3000/login (JSON ou form)");
+console.log("  GET  http://localhost:3000/stream-chunks");
+console.log("  GET  http://localhost:3000/events");

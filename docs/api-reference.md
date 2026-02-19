@@ -3,7 +3,7 @@
 ## Core Exports
 
 ```ts
-import { createApp, contract, defineHandler, Context, z } from "sansao";
+import { createApp, contract, defineHandler, Context, HttpError, z } from "sansao";
 ```
 
 ## `contract`
@@ -155,6 +155,8 @@ ctx.json(status, data);
 ctx.html(status, html);
 ctx.text(status, text);
 ctx.redirect(url, status?);
+ctx.stream(status, body, options?);
+ctx.sse(status, source, options?);
 ctx.setHeader(name, value);
 ```
 
@@ -165,11 +167,60 @@ ctx.setCookie(name, value, options?);
 ctx.deleteCookie(name, options?);
 ```
 
+### Typed Errors
+
+```ts
+type HttpErrorOptions<TDetails = unknown> = {
+  code?: string;
+  details?: TDetails;
+};
+
+class HttpError<TDetails = unknown> extends Error {
+  readonly status: number;
+  readonly code?: string;
+  readonly details?: TDetails;
+}
+
+ctx.error(status, message, options?); // returns HttpError
+ctx.fail(status, message, options?); // throws HttpError
+```
+
+Use `ctx.fail(...)` for early exits in handlers/middlewares with a stable payload:
+
+```ts
+throw ctx.fail(422, "Validation failed", {
+  code: "VALIDATION_FAILED",
+  details: { field: "email" },
+});
+```
+
+### Streaming Helpers
+
+```ts
+ctx.stream(status, body, {
+  headers?: HeadersInit;
+});
+
+ctx.sse(status, source, {
+  headers?: HeadersInit;
+  retry?: number;
+});
+```
+
+- `ctx.stream` returns a generic streaming `Response` and preserves queued headers/cookies.
+- `ctx.sse` sets SSE defaults (`content-type`, `cache-control`, `connection`) and supports:
+  - `ReadableStream<Uint8Array>`
+  - `AsyncIterable<string | Uint8Array>`
+
 ## Validation and Parsing Notes
 
-- Body parsing supports `application/json` and `application/x-www-form-urlencoded`.
+- Body parsing supports:
+  - `application/json`
+  - `application/x-www-form-urlencoded`
+  - `multipart/form-data`
 - `DELETE` requests can include a validated body when defined in contract.
 - Empty JSON payload can validate as `undefined` if schema allows it.
+- For `multipart/form-data`, repeated fields are grouped as arrays.
 - Query parsing uses selective coercion fallback for typed schemas.
 - Response validation can run against `contract.response[status]` based on `createApp({ responseValidation })`.
 
