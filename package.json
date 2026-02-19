@@ -1,6 +1,6 @@
 {
   "name": "sansao",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Backend-first, contract-driven framework for predictable APIs",
   "type": "module",
   "main": "./dist/src/index.js",
