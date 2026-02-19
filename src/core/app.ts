@@ -15,12 +15,57 @@ export type Middleware = (
 
 export type ResponseValidationMode = "off" | "development" | "always";
 
+export type RequestPhase =
+  | "routing"
+  | "params"
+  | "query"
+  | "headers"
+  | "body"
+  | "middleware"
+  | "response_validation";
+
+export type RequestEvent = {
+  request: Request;
+  method: string;
+  path: string;
+  startedAt: number;
+  contract?: ContractDefinition;
+  params?: Record<string, string>;
+};
+
+export type ResponseEvent = RequestEvent & {
+  response: Response;
+  durationMs: number;
+};
+
+export type ErrorEvent = RequestEvent & {
+  error: unknown;
+  durationMs: number;
+  phase: RequestPhase;
+};
+
+export type AppHooks = {
+  onRequest?: (event: RequestEvent) => void | Promise<void>;
+  onResponse?: (event: ResponseEvent) => void | Promise<void>;
+  onError?: (event: ErrorEvent) => void | Promise<void>;
+};
+
 export type AppOptions = {
   responseValidation?: ResponseValidationMode;
+  hooks?: AppHooks;
 };
 
 const RESPONSE_VALIDATION_MAX_BODY_BYTES = 1024 * 1024;
 const RESPONSE_VALIDATION_READ_TIMEOUT_MS = 50;
+
+type RequestTraceState = {
+  request: Request;
+  method: string;
+  path: string;
+  startedAt: number;
+  contract?: ContractDefinition;
+  params?: Record<string, string>;
+};
 
 /**
  * Main Sansao runtime.
@@ -40,6 +85,7 @@ export class App {
   constructor(options: AppOptions = {}) {
     this.options = {
       responseValidation: options.responseValidation ?? "development",
+      hooks: options.hooks ?? {},
     };
   }
 
@@ -66,71 +112,98 @@ export class App {
 
   /** Handles a Fetch API request end-to-end and returns a response. */
   async fetch(request: Request): Promise<Response> {
+    const trace: RequestTraceState = {
+      request,
+      method: request.method,
+      path: request.url,
+      startedAt: Date.now(),
+    };
+    let phase: RequestPhase = "routing";
+
     try {
       const url = new URL(request.url);
+      trace.path = url.pathname;
+      await this.invokeRequestHook(trace);
+
       const match = this.router.find(request.method, url.pathname);
 
       if (!match) {
-        return this.errorResponse(404, "Not Found", {
+        const response = this.errorResponse(404, "Not Found", {
           code: "ROUTE_NOT_FOUND",
         });
+        await this.invokeResponseHook(trace, response);
+        return response;
       }
 
       const { contract, params } = match;
+      trace.contract = contract;
+      trace.params = params;
       const handler = this.handlers.get(contract);
 
       if (!handler) {
-        return this.errorResponse(500, "Handler not found", {
+        const response = this.errorResponse(500, "Handler not found", {
           code: "HANDLER_NOT_FOUND",
         });
+        await this.invokeResponseHook(trace, response);
+        return response;
       }
 
       const ctx = new Context(request, contract);
 
       // Parse and validate route params before handler execution.
+      phase = "params";
       if (contract.params) {
         const paramsResult = this.parseParams(contract.params, params);
         if (paramsResult.success) {
           (ctx as any).params = paramsResult.data;
         } else {
-          return this.errorResponse(400, "Invalid params", {
+          const response = this.errorResponse(400, "Invalid params", {
             code: "INVALID_PARAMS",
             details: paramsResult.error,
           });
+          await this.invokeResponseHook(trace, response);
+          return response;
         }
       } else {
         (ctx as any).params = params;
       }
 
       // Parse and validate query string values.
+      phase = "query";
       if (contract.query) {
         const queryResult = this.parseQuery(contract.query, url.searchParams);
         if (queryResult.success) {
           (ctx as any).query = queryResult.data;
         } else {
-          return this.errorResponse(400, "Invalid query", {
+          const response = this.errorResponse(400, "Invalid query", {
             code: "INVALID_QUERY",
             details: queryResult.error,
           });
+          await this.invokeResponseHook(trace, response);
+          return response;
         }
       } else {
         (ctx as any).query = Object.fromEntries(url.searchParams);
       }
 
       // Parse and validate request headers.
+      phase = "headers";
       if (contract.headers) {
         const headersResult = this.parseHeaders(contract.headers, request.headers);
         if (headersResult.success) {
           (ctx as any).headers = headersResult.data;
         } else {
-          return this.errorResponse(400, "Invalid headers", {
+          const response = this.errorResponse(400, "Invalid headers", {
             code: "INVALID_HEADERS",
             details: headersResult.error,
           });
+          await this.invokeResponseHook(trace, response);
+          return response;
         }
       }
 
       // Parse and validate request body for methods that can carry payloads.
+      phase = "body";
       if (
         contract.body &&
         (request.method === "POST" ||
@@ -142,14 +215,17 @@ export class App {
         if (bodyResult.success) {
           (ctx as any).body = bodyResult.data;
         } else {
-          return this.errorResponse(400, "Invalid body", {
+          const response = this.errorResponse(400, "Invalid body", {
             code: "INVALID_BODY",
             details: bodyResult.error,
           });
+          await this.invokeResponseHook(trace, response);
+          return response;
         }
       }
 
       // Execute middleware stack in registration order.
+      phase = "middleware";
       const executeMiddleware = async (index: number): Promise<Response> => {
         if (index >= this.middlewares.length) {
           return handler(ctx);
@@ -159,16 +235,22 @@ export class App {
       };
 
       const response = await executeMiddleware(0);
+      phase = "response_validation";
       const responseValidationResult = await this.validateResponse(contract, response);
       if (!responseValidationResult.success) {
-        return this.errorResponse(500, "Invalid response", {
+        const invalidResponse = this.errorResponse(500, "Invalid response", {
           code: "INVALID_RESPONSE",
           details: responseValidationResult.error,
         });
+        await this.invokeResponseHook(trace, invalidResponse);
+        return invalidResponse;
       }
 
+      await this.invokeResponseHook(trace, response);
       return response;
     } catch (error: unknown) {
+      await this.invokeErrorHook(trace, error, phase);
+
       const normalizedError = this.normalizeError(error);
       const errorOptions: { code?: string; details?: unknown } = {};
       if (normalizedError.code !== undefined) {
@@ -177,7 +259,258 @@ export class App {
       if (normalizedError.details !== undefined) {
         errorOptions.details = normalizedError.details;
       }
-      return this.errorResponse(normalizedError.status, normalizedError.message, errorOptions);
+      const response = this.errorResponse(normalizedError.status, normalizedError.message, errorOptions);
+      await this.invokeResponseHook(trace, response);
+      return response;
+    }
+  }
+
+  private async invokeRequestHook(trace: RequestTraceState): Promise<void> {
+    const hook = this.options.hooks.onRequest;
+    if (!hook) {
+      return;
+    }
+    await this.invokeHook(hook, this.createRequestEvent(trace));
+  }
+
+  private async invokeResponseHook(trace: RequestTraceState, response: Response): Promise<void> {
+    const hook = this.options.hooks.onResponse;
+    if (!hook) {
+      return;
+    }
+    await this.invokeHook(hook, this.createResponseEvent(trace, response));
+  }
+
+  private async invokeErrorHook(
+    trace: RequestTraceState,
+    error: unknown,
+    phase: RequestPhase
+  ): Promise<void> {
+    const hook = this.options.hooks.onError;
+    if (!hook) {
+      return;
+    }
+    await this.invokeHook(hook, this.createErrorEvent(trace, error, phase));
+  }
+
+  private createRequestEvent(trace: RequestTraceState): RequestEvent {
+    const event: RequestEvent = {
+      request: this.createHookRequestView(trace.request),
+      method: trace.method,
+      path: trace.path,
+      startedAt: trace.startedAt,
+    };
+
+    if (trace.contract !== undefined) {
+      event.contract = trace.contract;
+    }
+    if (trace.params !== undefined) {
+      event.params = trace.params;
+    }
+
+    return event;
+  }
+
+  private createResponseEvent(trace: RequestTraceState, response: Response): ResponseEvent {
+    return {
+      ...this.createRequestEvent(trace),
+      response: this.createHookResponseView(response),
+      durationMs: Date.now() - trace.startedAt,
+    };
+  }
+
+  private createErrorEvent(trace: RequestTraceState, error: unknown, phase: RequestPhase): ErrorEvent {
+    return {
+      ...this.createRequestEvent(trace),
+      error,
+      phase,
+      durationMs: Date.now() - trace.startedAt,
+    };
+  }
+
+  private cloneRequestForHook(request: Request): Request {
+    try {
+      return request.clone();
+    } catch {
+      return new Request(request.url, {
+        method: request.method,
+        headers: request.headers,
+      });
+    }
+  }
+
+  private createHookRequestView(request: Request): Request {
+    if (!request.body) {
+      return request;
+    }
+
+    let bodyClone: Request | undefined;
+    let bodyView: ReadableStream<Uint8Array> | undefined;
+    const getBodyClone = (): Request => {
+      if (!bodyClone) {
+        bodyClone = this.cloneRequestForHook(request);
+      }
+      return bodyClone;
+    };
+
+    return new Proxy(request, {
+      get: (target, prop) => {
+        const isBodyReaderMethod =
+          prop === "text" ||
+          prop === "json" ||
+          prop === "arrayBuffer" ||
+          prop === "blob" ||
+          prop === "formData" ||
+          (prop === "bytes" && typeof Reflect.get(target, "bytes", target) === "function");
+        if (isBodyReaderMethod) {
+          return (...args: unknown[]) => {
+            const method = prop as "text" | "json" | "arrayBuffer" | "blob" | "formData" | "bytes";
+            const clone = getBodyClone() as unknown as {
+              [K in typeof method]: (...input: unknown[]) => unknown;
+            };
+            return clone[method](...args);
+          };
+        }
+
+        if (prop === "body") {
+          if (!bodyView) {
+            bodyView = this.createHookBodyStreamView(
+              () => getBodyClone().body,
+              () => bodyClone !== undefined,
+              () => request.body
+            );
+          }
+          return bodyView;
+        }
+        if (prop === "bodyUsed") {
+          return bodyClone ? bodyClone.bodyUsed : Reflect.get(target, prop, target);
+        }
+
+        const value = Reflect.get(target, prop, target);
+        if (typeof value === "function") {
+          return value.bind(target);
+        }
+        return value;
+      },
+    });
+  }
+
+  private cloneResponseForHook(response: Response): Response {
+    try {
+      return response.clone();
+    } catch {
+      return new Response(null, {
+        status: response.status,
+        headers: response.headers,
+      });
+    }
+  }
+
+  private createHookResponseView(response: Response): Response {
+    if (!response.body) {
+      return response;
+    }
+
+    let bodyClone: Response | undefined;
+    let bodyView: ReadableStream<Uint8Array> | undefined;
+    const getBodyClone = (): Response => {
+      if (!bodyClone) {
+        bodyClone = this.cloneResponseForHook(response);
+      }
+      return bodyClone;
+    };
+
+    return new Proxy(response, {
+      get: (target, prop) => {
+        const isBodyReaderMethod =
+          prop === "text" ||
+          prop === "json" ||
+          prop === "arrayBuffer" ||
+          prop === "blob" ||
+          prop === "formData" ||
+          (prop === "bytes" && typeof Reflect.get(target, "bytes", target) === "function");
+        if (isBodyReaderMethod) {
+          return (...args: unknown[]) => {
+            const method = prop as "text" | "json" | "arrayBuffer" | "blob" | "formData" | "bytes";
+            const clone = getBodyClone() as unknown as {
+              [K in typeof method]: (...input: unknown[]) => unknown;
+            };
+            return clone[method](...args);
+          };
+        }
+
+        if (prop === "body") {
+          if (!bodyView) {
+            bodyView = this.createHookBodyStreamView(
+              () => getBodyClone().body,
+              () => bodyClone !== undefined,
+              () => response.body
+            );
+          }
+          return bodyView;
+        }
+        if (prop === "bodyUsed") {
+          return bodyClone ? bodyClone.bodyUsed : Reflect.get(target, prop, target);
+        }
+
+        const value = Reflect.get(target, prop, target);
+        if (typeof value === "function") {
+          return value.bind(target);
+        }
+        return value;
+      },
+    });
+  }
+
+  private createHookBodyStreamView(
+    getClonedBody: () => ReadableStream<Uint8Array> | null,
+    hasClonedBody: () => boolean,
+    getOriginalBody: () => ReadableStream<Uint8Array> | null
+  ): ReadableStream<Uint8Array> {
+    const originalBody = getOriginalBody();
+    if (!originalBody) {
+      return new ReadableStream<Uint8Array>();
+    }
+
+    return new Proxy(originalBody, {
+      get(target, prop) {
+        if (prop === "locked") {
+          if (hasClonedBody()) {
+            return getClonedBody()?.locked ?? false;
+          }
+          return target.locked;
+        }
+
+        if (prop === Symbol.toStringTag) {
+          return "ReadableStream";
+        }
+
+        const clonedBody = getClonedBody();
+        if (!clonedBody) {
+          return undefined;
+        }
+
+        const value = Reflect.get(clonedBody as unknown as object, prop, clonedBody);
+        if (typeof value === "function") {
+          return value.bind(clonedBody);
+        }
+        return value;
+      },
+    });
+  }
+
+  private async invokeHook<TEvent>(
+    hook: ((event: TEvent) => void | Promise<void>) | undefined,
+    event: TEvent
+  ): Promise<void> {
+    if (!hook) {
+      return;
+    }
+
+    try {
+      await hook(event);
+    } catch {
+      // Hook failures must never break request processing.
     }
   }
 

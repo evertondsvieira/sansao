@@ -141,6 +141,32 @@ app.use(async (ctx, next) => {
 });
 ```
 
+## Observability Hooks
+
+You can attach optional lifecycle hooks directly in `createApp`:
+
+```ts
+const app = createApp({
+  hooks: {
+    onRequest(event) {
+      console.log("->", event.method, event.path);
+    },
+    onResponse(event) {
+      console.log("<-", event.response.status, `${event.durationMs}ms`);
+    },
+    onError(event) {
+      console.error("x", event.phase, event.error);
+    },
+  },
+});
+```
+
+Hook guarantees:
+
+- Hook failures never break request handling.
+- `onRequest` and `onResponse` can read body payloads safely.
+- Request/response cloning is lazy and only happens when body readers are used.
+
 ## Next Steps
 
 - API signatures and available helpers: [`api-reference.md`](api-reference.md)

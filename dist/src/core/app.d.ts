@@ -1,3 +1,4 @@
+import type { ContractDefinition } from "../types/index.js";
 import { Context } from "./context.js";
 import type { Handler } from "./handler.js";
 /**
@@ -6,8 +7,32 @@ import type { Handler } from "./handler.js";
  */
 export type Middleware = (ctx: Context, next: () => Promise<Response>) => Promise<Response> | Response;
 export type ResponseValidationMode = "off" | "development" | "always";
+export type RequestPhase = "routing" | "params" | "query" | "headers" | "body" | "middleware" | "response_validation";
+export type RequestEvent = {
+    request: Request;
+    method: string;
+    path: string;
+    startedAt: number;
+    contract?: ContractDefinition;
+    params?: Record<string, string>;
+};
+export type ResponseEvent = RequestEvent & {
+    response: Response;
+    durationMs: number;
+};
+export type ErrorEvent = RequestEvent & {
+    error: unknown;
+    durationMs: number;
+    phase: RequestPhase;
+};
+export type AppHooks = {
+    onRequest?: (event: RequestEvent) => void | Promise<void>;
+    onResponse?: (event: ResponseEvent) => void | Promise<void>;
+    onError?: (event: ErrorEvent) => void | Promise<void>;
+};
 export type AppOptions = {
     responseValidation?: ResponseValidationMode;
+    hooks?: AppHooks;
 };
 /**
  * Main Sansao runtime.
@@ -31,6 +56,18 @@ export declare class App {
     use(middleware: Middleware): void;
     /** Handles a Fetch API request end-to-end and returns a response. */
     fetch(request: Request): Promise<Response>;
+    private invokeRequestHook;
+    private invokeResponseHook;
+    private invokeErrorHook;
+    private createRequestEvent;
+    private createResponseEvent;
+    private createErrorEvent;
+    private cloneRequestForHook;
+    private createHookRequestView;
+    private cloneResponseForHook;
+    private createHookResponseView;
+    private createHookBodyStreamView;
+    private invokeHook;
     private errorResponse;
     private normalizeError;
     private normalizeStatusCode;

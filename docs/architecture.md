@@ -24,6 +24,7 @@ src/
 
 ```txt
 Incoming Request
+  -> Hooks.onRequest
   -> Router.find(method, path)
   -> Parse + validate contract input
      - params
@@ -32,7 +33,10 @@ Incoming Request
      - body
   -> Execute middleware chain
   -> Execute matched handler
+  -> Response validation (configurable)
+  -> Hooks.onResponse
   -> Return Response
+  -> (On throw) Hooks.onError + normalized error response + Hooks.onResponse
 ```
 
 ## Routing Guarantees
@@ -63,6 +67,22 @@ Each middleware can:
 - run code before `await next()`;
 - inspect or transform the returned `Response`;
 - short-circuit by returning a `Response` early.
+
+## Hooks Execution Model
+
+`createApp({ hooks })` supports three optional lifecycle hooks:
+
+- `onRequest`: runs after URL parsing and before route validation/handler execution.
+- `onResponse`: runs before returning the final response (including framework-generated error responses).
+- `onError`: runs when pipeline errors are caught and includes a `phase` indicating where failure happened.
+
+Hook execution is isolated: exceptions thrown inside hooks are ignored by the core runtime.
+
+## Stream Safety for Hooks
+
+- Hook payload readers (`text/json/arrayBuffer/blob/formData/bytes`) use a lazy clone strategy.
+- Metadata access (`status`, `headers`, `body`, `bodyUsed`) does not force cloning.
+- This keeps regular requests fast while still allowing observability hooks to inspect payloads safely.
 
 ## Adapter Boundary
 

@@ -56,6 +56,11 @@ defineHandler(myContract, async (ctx) => {
 const app = createApp({
   // default: "development"
   responseValidation: "development", // "off" | "development" | "always"
+  hooks: {
+    onRequest(event) {},
+    onResponse(event) {},
+    onError(event) {},
+  },
 });
 
 app.register(handler);
@@ -64,6 +69,52 @@ app.use(middleware);
 
 const response = await app.fetch(request); // Promise<Response>
 ```
+
+### Hook Types
+
+```ts
+type RequestPhase =
+  | "routing"
+  | "params"
+  | "query"
+  | "headers"
+  | "body"
+  | "middleware"
+  | "response_validation";
+
+type RequestEvent = {
+  request: Request;
+  method: string;
+  path: string;
+  startedAt: number;
+  contract?: ContractDefinition;
+  params?: Record<string, string>;
+};
+
+type ResponseEvent = RequestEvent & {
+  response: Response;
+  durationMs: number;
+};
+
+type ErrorEvent = RequestEvent & {
+  error: unknown;
+  durationMs: number;
+  phase: RequestPhase;
+};
+
+type AppHooks = {
+  onRequest?: (event: RequestEvent) => void | Promise<void>;
+  onResponse?: (event: ResponseEvent) => void | Promise<void>;
+  onError?: (event: ErrorEvent) => void | Promise<void>;
+};
+```
+
+### Hook Behavior
+
+- Hooks are optional and run inside the `fetch` pipeline.
+- Hook errors are swallowed by design and do not fail requests.
+- `onResponse` also runs for framework-generated error responses.
+- Hook body access is safe: reading `event.request` or `event.response` body does not consume the original stream used by handlers/callers.
 
 ### `responseValidation` modes
 

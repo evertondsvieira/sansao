@@ -18,7 +18,12 @@ export {
   createApp,
   App,
   type Middleware,
+  type AppHooks,
   type AppOptions,
+  type RequestEvent,
+  type ResponseEvent,
+  type ErrorEvent,
+  type RequestPhase,
   type ResponseValidationMode,
 } from "./core/app.js";
 export { defineHandler, type Handler, type HandlerFunction } from "./core/handler.js";

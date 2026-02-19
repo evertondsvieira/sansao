@@ -20,6 +20,7 @@ export class App {
     constructor(options = {}) {
         this.options = {
             responseValidation: options.responseValidation ?? "development",
+            hooks: options.hooks ?? {},
         };
     }
     /** Registers one or many handlers. */
@@ -41,68 +42,93 @@ export class App {
     }
     /** Handles a Fetch API request end-to-end and returns a response. */
     async fetch(request) {
+        const trace = {
+            request,
+            method: request.method,
+            path: request.url,
+            startedAt: Date.now(),
+        };
+        let phase = "routing";
         try {
             const url = new URL(request.url);
+            trace.path = url.pathname;
+            await this.invokeRequestHook(trace);
             const match = this.router.find(request.method, url.pathname);
             if (!match) {
-                return this.errorResponse(404, "Not Found", {
+                const response = this.errorResponse(404, "Not Found", {
                     code: "ROUTE_NOT_FOUND",
                 });
+                await this.invokeResponseHook(trace, response);
+                return response;
             }
             const { contract, params } = match;
+            trace.contract = contract;
+            trace.params = params;
             const handler = this.handlers.get(contract);
             if (!handler) {
-                return this.errorResponse(500, "Handler not found", {
+                const response = this.errorResponse(500, "Handler not found", {
                     code: "HANDLER_NOT_FOUND",
                 });
+                await this.invokeResponseHook(trace, response);
+                return response;
             }
             const ctx = new Context(request, contract);
             // Parse and validate route params before handler execution.
+            phase = "params";
             if (contract.params) {
                 const paramsResult = this.parseParams(contract.params, params);
                 if (paramsResult.success) {
                     ctx.params = paramsResult.data;
                 }
                 else {
-                    return this.errorResponse(400, "Invalid params", {
+                    const response = this.errorResponse(400, "Invalid params", {
                         code: "INVALID_PARAMS",
                         details: paramsResult.error,
                     });
+                    await this.invokeResponseHook(trace, response);
+                    return response;
                 }
             }
             else {
                 ctx.params = params;
             }
             // Parse and validate query string values.
+            phase = "query";
             if (contract.query) {
                 const queryResult = this.parseQuery(contract.query, url.searchParams);
                 if (queryResult.success) {
                     ctx.query = queryResult.data;
                 }
                 else {
-                    return this.errorResponse(400, "Invalid query", {
+                    const response = this.errorResponse(400, "Invalid query", {
                         code: "INVALID_QUERY",
                         details: queryResult.error,
                     });
+                    await this.invokeResponseHook(trace, response);
+                    return response;
                 }
             }
             else {
                 ctx.query = Object.fromEntries(url.searchParams);
             }
             // Parse and validate request headers.
+            phase = "headers";
             if (contract.headers) {
                 const headersResult = this.parseHeaders(contract.headers, request.headers);
                 if (headersResult.success) {
                     ctx.headers = headersResult.data;
                 }
                 else {
-                    return this.errorResponse(400, "Invalid headers", {
+                    const response = this.errorResponse(400, "Invalid headers", {
                         code: "INVALID_HEADERS",
                         details: headersResult.error,
                     });
+                    await this.invokeResponseHook(trace, response);
+                    return response;
                 }
             }
             // Parse and validate request body for methods that can carry payloads.
+            phase = "body";
             if (contract.body &&
                 (request.method === "POST" ||
                     request.method === "PUT" ||
@@ -113,13 +139,16 @@ export class App {
                     ctx.body = bodyResult.data;
                 }
                 else {
-                    return this.errorResponse(400, "Invalid body", {
+                    const response = this.errorResponse(400, "Invalid body", {
                         code: "INVALID_BODY",
                         details: bodyResult.error,
                     });
+                    await this.invokeResponseHook(trace, response);
+                    return response;
                 }
             }
             // Execute middleware stack in registration order.
+            phase = "middleware";
             const executeMiddleware = async (index) => {
                 if (index >= this.middlewares.length) {
                     return handler(ctx);
@@ -128,16 +157,21 @@ export class App {
                 return middleware(ctx, () => executeMiddleware(index + 1));
             };
             const response = await executeMiddleware(0);
+            phase = "response_validation";
             const responseValidationResult = await this.validateResponse(contract, response);
             if (!responseValidationResult.success) {
-                return this.errorResponse(500, "Invalid response", {
+                const invalidResponse = this.errorResponse(500, "Invalid response", {
                     code: "INVALID_RESPONSE",
                     details: responseValidationResult.error,
                 });
+                await this.invokeResponseHook(trace, invalidResponse);
+                return invalidResponse;
             }
+            await this.invokeResponseHook(trace, response);
             return response;
         }
         catch (error) {
+            await this.invokeErrorHook(trace, error, phase);
             const normalizedError = this.normalizeError(error);
             const errorOptions = {};
             if (normalizedError.code !== undefined) {
@@ -146,7 +180,209 @@ export class App {
             if (normalizedError.details !== undefined) {
                 errorOptions.details = normalizedError.details;
             }
-            return this.errorResponse(normalizedError.status, normalizedError.message, errorOptions);
+            const response = this.errorResponse(normalizedError.status, normalizedError.message, errorOptions);
+            await this.invokeResponseHook(trace, response);
+            return response;
+        }
+    }
+    async invokeRequestHook(trace) {
+        const hook = this.options.hooks.onRequest;
+        if (!hook) {
+            return;
+        }
+        await this.invokeHook(hook, this.createRequestEvent(trace));
+    }
+    async invokeResponseHook(trace, response) {
+        const hook = this.options.hooks.onResponse;
+        if (!hook) {
+            return;
+        }
+        await this.invokeHook(hook, this.createResponseEvent(trace, response));
+    }
+    async invokeErrorHook(trace, error, phase) {
+        const hook = this.options.hooks.onError;
+        if (!hook) {
+            return;
+        }
+        await this.invokeHook(hook, this.createErrorEvent(trace, error, phase));
+    }
+    createRequestEvent(trace) {
+        const event = {
+            request: this.createHookRequestView(trace.request),
+            method: trace.method,
+            path: trace.path,
+            startedAt: trace.startedAt,
+        };
+        if (trace.contract !== undefined) {
+            event.contract = trace.contract;
+        }
+        if (trace.params !== undefined) {
+            event.params = trace.params;
+        }
+        return event;
+    }
+    createResponseEvent(trace, response) {
+        return {
+            ...this.createRequestEvent(trace),
+            response: this.createHookResponseView(response),
+            durationMs: Date.now() - trace.startedAt,
+        };
+    }
+    createErrorEvent(trace, error, phase) {
+        return {
+            ...this.createRequestEvent(trace),
+            error,
+            phase,
+            durationMs: Date.now() - trace.startedAt,
+        };
+    }
+    cloneRequestForHook(request) {
+        try {
+            return request.clone();
+        }
+        catch {
+            return new Request(request.url, {
+                method: request.method,
+                headers: request.headers,
+            });
+        }
+    }
+    createHookRequestView(request) {
+        if (!request.body) {
+            return request;
+        }
+        let bodyClone;
+        let bodyView;
+        const getBodyClone = () => {
+            if (!bodyClone) {
+                bodyClone = this.cloneRequestForHook(request);
+            }
+            return bodyClone;
+        };
+        return new Proxy(request, {
+            get: (target, prop) => {
+                const isBodyReaderMethod = prop === "text" ||
+                    prop === "json" ||
+                    prop === "arrayBuffer" ||
+                    prop === "blob" ||
+                    prop === "formData" ||
+                    (prop === "bytes" && typeof Reflect.get(target, "bytes", target) === "function");
+                if (isBodyReaderMethod) {
+                    return (...args) => {
+                        const method = prop;
+                        const clone = getBodyClone();
+                        return clone[method](...args);
+                    };
+                }
+                if (prop === "body") {
+                    if (!bodyView) {
+                        bodyView = this.createHookBodyStreamView(() => getBodyClone().body, () => bodyClone !== undefined, () => request.body);
+                    }
+                    return bodyView;
+                }
+                if (prop === "bodyUsed") {
+                    return bodyClone ? bodyClone.bodyUsed : Reflect.get(target, prop, target);
+                }
+                const value = Reflect.get(target, prop, target);
+                if (typeof value === "function") {
+                    return value.bind(target);
+                }
+                return value;
+            },
+        });
+    }
+    cloneResponseForHook(response) {
+        try {
+            return response.clone();
+        }
+        catch {
+            return new Response(null, {
+                status: response.status,
+                headers: response.headers,
+            });
+        }
+    }
+    createHookResponseView(response) {
+        if (!response.body) {
+            return response;
+        }
+        let bodyClone;
+        let bodyView;
+        const getBodyClone = () => {
+            if (!bodyClone) {
+                bodyClone = this.cloneResponseForHook(response);
+            }
+            return bodyClone;
+        };
+        return new Proxy(response, {
+            get: (target, prop) => {
+                const isBodyReaderMethod = prop === "text" ||
+                    prop === "json" ||
+                    prop === "arrayBuffer" ||
+                    prop === "blob" ||
+                    prop === "formData" ||
+                    (prop === "bytes" && typeof Reflect.get(target, "bytes", target) === "function");
+                if (isBodyReaderMethod) {
+                    return (...args) => {
+                        const method = prop;
+                        const clone = getBodyClone();
+                        return clone[method](...args);
+                    };
+                }
+                if (prop === "body") {
+                    if (!bodyView) {
+                        bodyView = this.createHookBodyStreamView(() => getBodyClone().body, () => bodyClone !== undefined, () => response.body);
+                    }
+                    return bodyView;
+                }
+                if (prop === "bodyUsed") {
+                    return bodyClone ? bodyClone.bodyUsed : Reflect.get(target, prop, target);
+                }
+                const value = Reflect.get(target, prop, target);
+                if (typeof value === "function") {
+                    return value.bind(target);
+                }
+                return value;
+            },
+        });
+    }
+    createHookBodyStreamView(getClonedBody, hasClonedBody, getOriginalBody) {
+        const originalBody = getOriginalBody();
+        if (!originalBody) {
+            return new ReadableStream();
+        }
+        return new Proxy(originalBody, {
+            get(target, prop) {
+                if (prop === "locked") {
+                    if (hasClonedBody()) {
+                        return getClonedBody()?.locked ?? false;
+                    }
+                    return target.locked;
+                }
+                if (prop === Symbol.toStringTag) {
+                    return "ReadableStream";
+                }
+                const clonedBody = getClonedBody();
+                if (!clonedBody) {
+                    return undefined;
+                }
+                const value = Reflect.get(clonedBody, prop, clonedBody);
+                if (typeof value === "function") {
+                    return value.bind(clonedBody);
+                }
+                return value;
+            },
+        });
+    }
+    async invokeHook(hook, event) {
+        if (!hook) {
+            return;
+        }
+        try {
+            await hook(event);
+        }
+        catch {
+            // Hook failures must never break request processing.
         }
     }
     errorResponse(status, error, options = {}) {

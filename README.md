@@ -32,6 +32,27 @@ serve(app, { port: 3000 });
 
 Runtime adapters available: `sansao/node`, `sansao/bun`, `sansao/deno`.
 
+## Observability Hooks
+
+```ts
+const app = createApp({
+  hooks: {
+    onRequest(event) {
+      console.log("->", event.method, event.path);
+    },
+    onResponse(event) {
+      console.log("<-", event.response.status, `${event.durationMs}ms`);
+    },
+    onError(event) {
+      console.error("x", event.phase, event.error);
+    },
+  },
+});
+```
+
+Available hooks: `onRequest`, `onResponse`, `onError`.
+These hooks are optional and safe: hook failures do not break request handling.
+
 ## Documentation
 
 - Getting Started: [`docs/getting-started.md`](docs/getting-started.md)
