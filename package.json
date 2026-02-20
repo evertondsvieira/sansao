@@ -21,6 +21,14 @@
     "./deno": {
       "import": "./dist/src/adapters/deno.js",
       "types": "./dist/src/adapters/deno.d.ts"
+    },
+    "./docs": {
+      "import": "./dist/src/docs/index.js",
+      "types": "./dist/src/docs/index.d.ts"
+    },
+    "./validators": {
+      "import": "./dist/src/validation/index.js",
+      "types": "./dist/src/validation/index.d.ts"
     }
   },
   "files": [

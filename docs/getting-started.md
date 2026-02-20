@@ -24,8 +24,10 @@ request
 ## Installation
 
 ```bash
-npm install sansao zod
+npm install sansao
 ```
+
+For validator-specific setup (Zod, Yup, Valibot, custom adapters), see [`validators.md`](validators.md).
 
 ## First Endpoint
 
@@ -78,6 +80,11 @@ const app = createApp({
   responseValidation: "always",
 });
 ```
+
+### Validation Library Choice
+
+- Sansao is validator-agnostic through adapters.
+- For concrete setup and examples, use [`validators.md`](validators.md).
 
 ### Run with Bun
 
@@ -171,3 +178,4 @@ Hook guarantees:
 
 - API signatures and available helpers: [`api-reference.md`](api-reference.md)
 - Runtime internals and guarantees: [`architecture.md`](architecture.md)
+- Docs generation options (OpenAPI/Swagger): see `create-sansao` docs in [`../create-sansao/README.md`](../create-sansao/README.md)

@@ -1,5 +1,4 @@
-import { z } from "zod";
-import type { ContractDefinition } from "../types/index.js";
+import type { ContractDefinition, InferBody, InferHeaders, InferParams, InferQuery } from "../types/index.js";
 /**
  * Cookie serialization options used when setting response cookies.
  */
@@ -35,10 +34,10 @@ export declare class HttpError<TDetails = unknown> extends Error {
 export declare class Context<TContract extends ContractDefinition = ContractDefinition> {
     request: Request;
     private contract;
-    params: TContract["params"] extends z.ZodTypeAny ? z.infer<TContract["params"]> : Record<string, string>;
-    query: TContract["query"] extends z.ZodTypeAny ? z.infer<TContract["query"]> : Record<string, string>;
-    body: TContract["body"] extends z.ZodTypeAny ? z.infer<TContract["body"]> : unknown;
-    headers: TContract["headers"] extends z.ZodTypeAny ? z.infer<TContract["headers"]> : Record<string, string>;
+    params: InferParams<TContract>;
+    query: InferQuery<TContract>;
+    body: InferBody<TContract>;
+    headers: InferHeaders<TContract>;
     cookies: Map<string, string>;
     private responseCookies;
     private responseHeaders;

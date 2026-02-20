@@ -7,10 +7,10 @@ Built on Web Standards, designed to pair with modern frontend architectures.
 ## Install
 
 ```bash
-npm install sansao zod
+npm install sansao
 ```
 
-## Quick Example
+## Quick Start (Zod)
 
 ```ts
 import { createApp, contract, defineHandler, z } from "sansao";
@@ -32,32 +32,57 @@ serve(app, { port: 3000 });
 
 Runtime adapters available: `sansao/node`, `sansao/bun`, `sansao/deno`.
 
-## Observability Hooks
+## What You Get
 
-```ts
-const app = createApp({
-  hooks: {
-    onRequest(event) {
-      console.log("->", event.method, event.path);
-    },
-    onResponse(event) {
-      console.log("<-", event.response.status, `${event.durationMs}ms`);
-    },
-    onError(event) {
-      console.error("x", event.phase, event.error);
-    },
-  },
-});
-```
+- Contract-first route definitions with pluggable schema validators.
+- Validated and typed `params`, `query`, `headers`, and `body`.
+- Runtime adapters for Node, Bun, and Deno.
+- Optional lifecycle hooks: `onRequest`, `onResponse`, `onError`.
+- Streaming helpers: `ctx.stream(...)` and `ctx.sse(...)`.
 
-Available hooks: `onRequest`, `onResponse`, `onError`.
-These hooks are optional and safe: hook failures do not break request handling.
+## Validator Adapters
+
+Sansao supports Zod, Yup, Valibot, and custom adapters.
+See full examples and install combinations in [`docs/validators.md`](docs/validators.md).
 
 ## Documentation
 
+- Documentation Index: [`docs/README.md`](docs/README.md)
 - Getting Started: [`docs/getting-started.md`](docs/getting-started.md)
+- Validators Guide: [`docs/validators.md`](docs/validators.md)
 - API Reference: [`docs/api-reference.md`](docs/api-reference.md)
 - Architecture: [`docs/architecture.md`](docs/architecture.md)
+- Auto-docs from Contracts: [`docs/auto-docs.md`](docs/auto-docs.md)
+
+Docs outputs you can generate in projects scaffolded by `create-sansao`:
+
+- `openapi.json`
+- `swagger.html` (Swagger UI over your OpenAPI spec)
+- or both
+
+## Example App
+
+Run local example:
+
+```bash
+npm run example
+```
+
+Available routes are printed on startup from `examples/basic.ts`.
+
+## Project Scaffolding
+
+`create-sansao` now supports interactive setup for validator and docs mode:
+
+```bash
+npm create sansao@latest my-api
+```
+
+Or via flags:
+
+```bash
+npm create sansao@latest my-api --validator valibot --docs swagger
+```
 
 ## License
 

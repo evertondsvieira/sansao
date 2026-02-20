@@ -1,8 +1,9 @@
-import { z } from "zod";
 import type { ContractDefinition } from "../types/index.js";
 import { Router } from "./router.js";
 import { Context, HttpError, type ErrorResponse } from "./context.js";
 import type { Handler, HandlerFunction } from "./handler.js";
+import type { ValidationAdapter, ValidationResult } from "../validation/types.js";
+import { zodValidator } from "../validation/zod.js";
 
 /**
  * Koa-style middleware signature.
@@ -53,6 +54,7 @@ export type AppHooks = {
 export type AppOptions = {
   responseValidation?: ResponseValidationMode;
   hooks?: AppHooks;
+  validator?: ValidationAdapter;
 };
 
 const RESPONSE_VALIDATION_MAX_BODY_BYTES = 1024 * 1024;
@@ -86,6 +88,7 @@ export class App {
     this.options = {
       responseValidation: options.responseValidation ?? "development",
       hooks: options.hooks ?? {},
+      validator: options.validator ?? zodValidator,
     };
   }
 
@@ -108,6 +111,16 @@ export class App {
   /** Adds middleware to the execution chain (registration order). */
   use(middleware: Middleware): void {
     this.middlewares.push(middleware);
+  }
+
+  /** Returns a snapshot of registered route contracts. */
+  getContracts(): readonly ContractDefinition[] {
+    return this.router.getAllContracts();
+  }
+
+  /** Returns the validation adapter configured for this app instance. */
+  getValidator(): ValidationAdapter {
+    return this.options.validator;
   }
 
   /** Handles a Fetch API request end-to-end and returns a response. */
@@ -681,7 +694,7 @@ export class App {
       return { success: true };
     }
 
-    const parseResult = schema.safeParse(bodyResult.data);
+    const parseResult = this.options.validator.parse(schema, bodyResult.data);
     return parseResult.success
       ? { success: true }
       : { success: false, error: parseResult.error };
@@ -844,18 +857,15 @@ export class App {
     });
   }
 
-  private parseParams(schema: z.ZodTypeAny, params: Record<string, string>): { success: true; data: any } | { success: false; error: any } {
-    const result = schema.safeParse(params);
-    return result.success 
-      ? { success: true, data: result.data }
-      : { success: false, error: result.error };
+  private parseParams(schema: unknown, params: Record<string, string>): ValidationResult {
+    return this.options.validator.parse(schema, params);
   }
 
   /**
    * Parses querystring values and retries with basic scalar coercion on failing keys.
    * Coercion targets booleans, null, and numeric strings.
    */
-  private parseQuery(schema: z.ZodTypeAny, searchParams: URLSearchParams): { success: true; data: any } | { success: false; error: any } {
+  private parseQuery(schema: unknown, searchParams: URLSearchParams): ValidationResult {
     const obj: Record<string, string | string[]> = {};
     
     for (const [key, value] of searchParams) {
@@ -868,17 +878,19 @@ export class App {
       }
     }
 
-    const rawResult = schema.safeParse(obj);
+    const rawResult = this.options.validator.parse(schema, obj);
     if (rawResult.success) {
       return { success: true, data: rawResult.data };
     }
 
+    const getErrorPaths = this.options.validator.getErrorPaths;
+    if (!getErrorPaths) {
+      return { success: false, error: rawResult.error };
+    }
+
     const keysToCoerce = new Set<string>();
-    for (const issue of rawResult.error.issues) {
-      const [firstPath] = issue.path;
-      if (typeof firstPath === "string") {
-        keysToCoerce.add(firstPath);
-      }
+    for (const path of getErrorPaths(rawResult.error)) {
+      keysToCoerce.add(path);
     }
 
     if (keysToCoerce.size === 0) {
@@ -886,7 +898,7 @@ export class App {
     }
 
     const coercedObj = this.coerceQueryObject(obj, keysToCoerce);
-    const coercedResult = schema.safeParse(coercedObj);
+    const coercedResult = this.options.validator.parse(schema, coercedObj);
     return coercedResult.success
       ? { success: true, data: coercedResult.data }
       : { success: false, error: coercedResult.error };
@@ -926,21 +938,18 @@ export class App {
   }
 
   /** Converts Headers into a plain object and validates with zod. */
-  private parseHeaders(schema: z.ZodTypeAny, headers: Headers): { success: true; data: any } | { success: false; error: any } {
+  private parseHeaders(schema: unknown, headers: Headers): ValidationResult {
     const obj: Record<string, string> = {};
     
     headers.forEach((value, key) => {
       obj[key] = value;
     });
 
-    const result = schema.safeParse(obj);
-    return result.success 
-      ? { success: true, data: result.data }
-      : { success: false, error: result.error };
+    return this.options.validator.parse(schema, obj);
   }
 
-  /** Parses body by content-type and validates with zod. */
-  private async parseBody(schema: z.ZodTypeAny, request: Request): Promise<{ success: true; data: any } | { success: false; error: any }> {
+  /** Parses body by content-type and validates with configured adapter. */
+  private async parseBody(schema: unknown, request: Request): Promise<ValidationResult> {
     const contentType = request.headers.get("content-type") || "";
     
     let data: any;
@@ -975,10 +984,7 @@ export class App {
       }
     }
 
-    const result = schema.safeParse(data);
-    return result.success 
-      ? { success: true, data: result.data }
-      : { success: false, error: result.error };
+    return this.options.validator.parse(schema, data);
   }
 
   private formDataToObject(formData: FormData): Record<string, FormDataEntryValue | FormDataEntryValue[]> {

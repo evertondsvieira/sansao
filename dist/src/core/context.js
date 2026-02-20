@@ -1,4 +1,3 @@
-import { z } from "zod";
 export class HttpError extends Error {
     status;
     code;

@@ -1,6 +1,6 @@
-import { z } from "zod";
 import { Router } from "./router.js";
 import { Context, HttpError } from "./context.js";
+import { zodValidator } from "../validation/zod.js";
 const RESPONSE_VALIDATION_MAX_BODY_BYTES = 1024 * 1024;
 const RESPONSE_VALIDATION_READ_TIMEOUT_MS = 50;
 /**
@@ -21,6 +21,7 @@ export class App {
         this.options = {
             responseValidation: options.responseValidation ?? "development",
             hooks: options.hooks ?? {},
+            validator: options.validator ?? zodValidator,
         };
     }
     /** Registers one or many handlers. */
@@ -39,6 +40,14 @@ export class App {
     /** Adds middleware to the execution chain (registration order). */
     use(middleware) {
         this.middlewares.push(middleware);
+    }
+    /** Returns a snapshot of registered route contracts. */
+    getContracts() {
+        return this.router.getAllContracts();
+    }
+    /** Returns the validation adapter configured for this app instance. */
+    getValidator() {
+        return this.options.validator;
     }
     /** Handles a Fetch API request end-to-end and returns a response. */
     async fetch(request) {
@@ -507,7 +516,7 @@ export class App {
         if (!("data" in bodyResult)) {
             return { success: true };
         }
-        const parseResult = schema.safeParse(bodyResult.data);
+        const parseResult = this.options.validator.parse(schema, bodyResult.data);
         return parseResult.success
             ? { success: true }
             : { success: false, error: parseResult.error };
@@ -627,10 +636,7 @@ export class App {
         });
     }
     parseParams(schema, params) {
-        const result = schema.safeParse(params);
-        return result.success
-            ? { success: true, data: result.data }
-            : { success: false, error: result.error };
+        return this.options.validator.parse(schema, params);
     }
     /**
      * Parses querystring values and retries with basic scalar coercion on failing keys.
@@ -648,22 +654,23 @@ export class App {
                 obj[key] = value;
             }
         }
-        const rawResult = schema.safeParse(obj);
+        const rawResult = this.options.validator.parse(schema, obj);
         if (rawResult.success) {
             return { success: true, data: rawResult.data };
         }
+        const getErrorPaths = this.options.validator.getErrorPaths;
+        if (!getErrorPaths) {
+            return { success: false, error: rawResult.error };
+        }
         const keysToCoerce = new Set();
-        for (const issue of rawResult.error.issues) {
-            const [firstPath] = issue.path;
-            if (typeof firstPath === "string") {
-                keysToCoerce.add(firstPath);
-            }
+        for (const path of getErrorPaths(rawResult.error)) {
+            keysToCoerce.add(path);
         }
         if (keysToCoerce.size === 0) {
             return { success: false, error: rawResult.error };
         }
         const coercedObj = this.coerceQueryObject(obj, keysToCoerce);
-        const coercedResult = schema.safeParse(coercedObj);
+        const coercedResult = this.options.validator.parse(schema, coercedObj);
         return coercedResult.success
             ? { success: true, data: coercedResult.data }
             : { success: false, error: coercedResult.error };
@@ -700,12 +707,9 @@ export class App {
         headers.forEach((value, key) => {
             obj[key] = value;
         });
-        const result = schema.safeParse(obj);
-        return result.success
-            ? { success: true, data: result.data }
-            : { success: false, error: result.error };
+        return this.options.validator.parse(schema, obj);
     }
-    /** Parses body by content-type and validates with zod. */
+    /** Parses body by content-type and validates with configured adapter. */
     async parseBody(schema, request) {
         const contentType = request.headers.get("content-type") || "";
         let data;
@@ -745,10 +749,7 @@ export class App {
                 data = await request.text();
             }
         }
-        const result = schema.safeParse(data);
-        return result.success
-            ? { success: true, data: result.data }
-            : { success: false, error: result.error };
+        return this.options.validator.parse(schema, data);
     }
     formDataToObject(formData) {
         const data = {};

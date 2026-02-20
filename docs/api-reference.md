@@ -30,13 +30,15 @@ contract.delete(path, options?);
 type ContractDefinition = {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS";
   path: string;
-  params?: z.ZodTypeAny;
-  query?: z.ZodTypeAny;
-  body?: z.ZodTypeAny;
-  headers?: z.ZodTypeAny;
-  response?: Record<number, z.ZodTypeAny>;
+  params?: unknown;
+  query?: unknown;
+  body?: unknown;
+  headers?: unknown;
+  response?: Record<number, unknown>;
 };
 ```
+
+By default, Sansao uses Zod validation. You can provide schemas from other libraries via a custom `validator` adapter in `createApp`.
 
 ## `defineHandler`
 
@@ -56,6 +58,8 @@ defineHandler(myContract, async (ctx) => {
 const app = createApp({
   // default: "development"
   responseValidation: "development", // "off" | "development" | "always"
+  // default: zodValidator
+  validator: myValidatorAdapter,
   hooks: {
     onRequest(event) {},
     onResponse(event) {},
@@ -107,7 +111,29 @@ type AppHooks = {
   onResponse?: (event: ResponseEvent) => void | Promise<void>;
   onError?: (event: ErrorEvent) => void | Promise<void>;
 };
+
+type ValidationAdapter = {
+  name: string;
+  parse(schema: unknown, data: unknown):
+    | { success: true; data: unknown }
+    | { success: false; error: unknown };
+  getErrorPaths?: (error: unknown) => string[];
+  toJSONSchema?: (schema: unknown) => Record<string, unknown> | null;
+};
 ```
+
+Built-in adapters/helpers:
+
+```ts
+import {
+  zodValidator,
+  createYupValidatorAdapter,
+  createValibotValidatorAdapter,
+} from "sansao/validators";
+```
+
+Yup and Valibot adapters include built-in JSON Schema conversion for common schema shapes.
+For advanced/custom schema nodes, you can still pass a custom `toJSONSchema` in adapter options.
 
 ### Hook Behavior
 
@@ -247,3 +273,44 @@ import { serve } from "sansao/deno";
 
 serve(app, { port: 3000 });
 ```
+
+## OpenAPI Generator
+
+Generate an OpenAPI 3.1 document directly from registered contracts.
+
+```ts
+import { generateOpenApi } from "sansao/docs";
+
+const spec = generateOpenApi(app, {
+  title: "My API",
+  version: "1.0.0",
+  servers: [{ url: "https://api.example.com" }],
+});
+```
+
+`generateOpenApi(...)` accepts either:
+
+- `App` instance (`createApp()` result), or
+- an array of contracts (`ContractDefinition[]`).
+
+Default request body content type is `application/json`.
+You can override it with `requestBodyContentTypes`.
+
+When generating from contract arrays (without `app`), pass a `validator` if schemas are not Zod:
+
+```ts
+const spec = generateOpenApi(contracts, {
+  title: "My API",
+  version: "1.0.0",
+  validator: myValidatorAdapter,
+});
+```
+
+## Documentation Outputs
+
+Sansao generates OpenAPI as the source artifact. From it you can publish docs with:
+
+- Swagger UI
+- Redoc
+- Scalar
+- any OpenAPI-compatible renderer/tooling

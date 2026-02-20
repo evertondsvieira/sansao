@@ -1,6 +1,7 @@
 // Types
 export type {
   HttpMethod,
+  ContractValidatorSchema,
   ContractDefinition,
   ContractSchema,
   InferParams,
@@ -34,6 +35,21 @@ export {
   type ErrorResponse,
   type HttpErrorOptions,
 } from "./core/context.js";
+export {
+  generateOpenApi,
+  type GenerateOpenApiOptions,
+  type OpenApiDocument,
+} from "./docs/index.js";
+export {
+  zodValidator,
+  createYupValidatorAdapter,
+  createValibotValidatorAdapter,
+  type ValidationAdapter,
+  type ValidationResult,
+  type YupLikeModule,
+  type YupValidatorOptions,
+  type ValibotValidatorOptions,
+} from "./validation/index.js";
 
 // Zod re-export para conveniência
 export { z } from "zod";

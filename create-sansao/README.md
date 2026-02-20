@@ -20,3 +20,16 @@ Options:
 npx create-sansao@latest --help
 npx create-sansao@latest --version
 ```
+
+Options:
+
+```bash
+npx create-sansao@latest my-api --validator zod --docs openapi
+npx create-sansao@latest my-api --validator yup --docs swagger
+npx create-sansao@latest my-api --validator valibot --docs both
+```
+
+- `--validator`: `zod` | `yup` | `valibot`
+- `--docs`: `none` | `openapi` | `swagger` | `both`
+
+If omitted in interactive terminals, the CLI prompts for both choices.

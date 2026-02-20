@@ -1,6 +1,7 @@
 import type { ContractDefinition } from "../types/index.js";
 import { Context } from "./context.js";
 import type { Handler } from "./handler.js";
+import type { ValidationAdapter } from "../validation/types.js";
 /**
  * Koa-style middleware signature.
  * Each middleware can short-circuit or call `next()` to continue the chain.
@@ -33,6 +34,7 @@ export type AppHooks = {
 export type AppOptions = {
     responseValidation?: ResponseValidationMode;
     hooks?: AppHooks;
+    validator?: ValidationAdapter;
 };
 /**
  * Main Sansao runtime.
@@ -54,6 +56,10 @@ export declare class App {
     private registerSingle;
     /** Adds middleware to the execution chain (registration order). */
     use(middleware: Middleware): void;
+    /** Returns a snapshot of registered route contracts. */
+    getContracts(): readonly ContractDefinition[];
+    /** Returns the validation adapter configured for this app instance. */
+    getValidator(): ValidationAdapter;
     /** Handles a Fetch API request end-to-end and returns a response. */
     fetch(request: Request): Promise<Response>;
     private invokeRequestHook;
@@ -91,7 +97,7 @@ export declare class App {
     private coerceQueryValue;
     /** Converts Headers into a plain object and validates with zod. */
     private parseHeaders;
-    /** Parses body by content-type and validates with zod. */
+    /** Parses body by content-type and validates with configured adapter. */
     private parseBody;
     private formDataToObject;
 }
