@@ -12,3 +12,11 @@ npm run dev
 ```
 
 Server starts at `http://localhost:3000`.
+
+## Generate OpenAPI
+
+```bash
+npm run docs:openapi
+```
+
+This writes `docs/openapi.json` from your registered Sansao contracts.

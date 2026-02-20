@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node --watch --experimental-strip-types src/index.ts",
     "start": "node --experimental-strip-types src/index.ts",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "docs:openapi": "node --experimental-strip-types src/generate-openapi.ts"
   },
   "dependencies": {
     "sansao": "latest",
